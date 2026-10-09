@@ -1,0 +1,31 @@
+# Implementation provenance
+
+The Intel, AMD and NVIDIA engines were extracted from KillerPixelCrew's MIT-licensed first-party GPU
+implementations in WSGM, at source commit
+[`1df3f4d8987fcff5f1c8f2554c489195f1cb8b13`](https://github.com/KillerPixelCrew/WSGM/tree/1df3f4d8987fcff5f1c8f2554c489195f1cb8b13).
+The extraction preserves native entry points, layouts, setting identities, support checks and native
+application-profile ownership while replacing WSGM SDK dependencies with library-owned records and a
+direct driver API.
+
+## Vendor references
+
+- [Intel implementation provenance](https://github.com/KillerPixelCrew/WSGM/blob/1df3f4d8987fcff5f1c8f2554c489195f1cb8b13/src/WSGM.Plugin.IntelGpu/PROVENANCE.md):
+  Intel Graphics Control Library headers/samples and dated observations.
+- [AMD implementation provenance](https://github.com/KillerPixelCrew/WSGM/blob/1df3f4d8987fcff5f1c8f2554c489195f1cb8b13/src/WSGM.Plugin.AmdGpu/PROVENANCE.md):
+  AMD ADLX/ADL, Handheld Companion behavioral references and ColorControl output-control references.
+- [NVIDIA implementation provenance](https://github.com/KillerPixelCrew/WSGM/blob/1df3f4d8987fcff5f1c8f2554c489195f1cb8b13/src/WSGM.Plugin.NvidiaGpu/PROVENANCE.md):
+  NVIDIA NVAPI, NoVidiaApp settings and ColorControl output-control references.
+
+Vendor driver libraries are loaded from the installed driver and are not redistributed. Generic
+Windows display identity and HDR operations use WindowsDeviceControl, pinned as a source dependency
+for standalone builds. WSGM reuses its existing sibling checkout of the same dependency.
+
+## Validation provenance
+
+The maintainer confirmed Intel and NVIDIA hardware testing and contributor AMD testing on
+2026-10-09. That confirmation describes the original engines. The extraction retains their tests and
+requires compilation and application parity verification; it does not relabel an automated fixture
+as a new hardware observation.
+
+The [inventory](inventory/README.md) records all 160 existing entries, native dependencies, shared
+runtime requirements and the boundary with application profile policy.

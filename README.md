@@ -1,11 +1,12 @@
 # LibGPUDriverInteract
 
-A planned Windows-first .NET library for Intel, AMD and NVIDIA graphics driver interaction. It will
-extract the existing WSGM vendor implementations into a reusable library that applications can
-consume directly.
+A Windows-first .NET library for Intel, AMD and NVIDIA graphics driver interaction. The native
+engines, serialized runtime and profile ownership mechanisms were extracted from WSGM's vendor
+implementations. Applications consume a direct driver API without WSGM SDK dependencies.
 
-The repository currently contains the implementation inventory and extraction plan. The existing
-vendor code remains in WSGM until its migration is implemented and verified.
+The source includes the library, migrated regression tests, public API and original implementation
+inventory. [Provenance](PROVENANCE.md) separates the existing engines' hardware observations from
+validation of their extraction.
 
 ## Scope
 
@@ -16,8 +17,8 @@ vendor code remains in WSGM until its migration is implemented and verified.
 | NVIDIA  | NVAPI and DRS                                  | Graphics settings, native application profiles, output colour, dithering and HDR output modes    |
 
 The library owns driver loading, native session lifetime, support discovery, adapters and outputs,
-supported values, read/write operations and explicit command outcomes. It loads the installed
-vendor driver's libraries; vendor binaries are not redistributed.
+supported values, read/write operations and explicit command outcomes. It loads the installed vendor
+driver's libraries; vendor binaries are not redistributed.
 
 The consuming application owns game detection, desired profiles, activation policy and UI. Native
 application-profile operations and restoration records may live in the library, with explicit
@@ -27,8 +28,8 @@ caller-owned storage and no implicit WSGM configuration paths.
 
 - [Implementation inventory](inventory/README.md): vendor control coverage, source paths and
   extraction boundaries.
-- [Machine-readable inventory](inventory/controls.json): controls and evidence from the current
-  WSGM implementation.
+- [Machine-readable inventory](inventory/controls.json): controls and evidence from the current WSGM
+  implementation.
 - [Extraction plan](PLAN.md): migration sequence and acceptance requirements.
 
 The current Intel and NVIDIA plugins have confirmed hardware testing; AMD testing was confirmed by
@@ -42,8 +43,30 @@ implementation. Migration into this library must preserve the behavior and its t
 - [WindowsDeviceControl](https://github.com/KillerPixelCrew/windows-device-control) owns generic
   Windows audio, radios, display topology, modes, Windows HDR and power policy.
 
-WSGM will consume this library directly and retire its three bundled GPU packages after migration.
-Its common Plugin SDK remains for independent extensions such as IR and third-party integrations.
+WSGM consumes this library directly through its graphics adapter and retains user profile, pin and
+journal identities. Its common Plugin SDK remains for independent extensions such as IR and
+third-party integrations.
+
+## Build and use
+
+Clone with submodules so standalone builds have the pinned WindowsDeviceControl source dependency.
+When this repository is inside WSGM, the project reuses WSGM's sibling dependency.
+
+```powershell
+git clone --recurse-submodules https://github.com/KillerPixelCrew/LibGPUDriverInteract.git
+dotnet build LibGPUDriverInteract.slnx -c Release
+```
+
+```csharp
+await using var driver = GpuDriver.Create(GpuVendor.Intel, callerOwnedStateDirectory);
+driver.DescriptorsChanged += descriptors => PublishControls(descriptors);
+driver.StateChanged += state => PublishObservedValue(state);
+await driver.StartAsync(cancellationToken);
+```
+
+[API.md](API.md) describes command admission, generations, events, caller budgets, native profile
+sync and safe retirement. Notifications run on the publishing thread; marshal UI work in the
+application. The caller supplies the state directory and chooses the driver/profile policy.
 
 ## Contributions
 
