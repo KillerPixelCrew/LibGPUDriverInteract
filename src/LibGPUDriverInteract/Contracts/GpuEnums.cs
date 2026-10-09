@@ -126,16 +126,13 @@ public enum GpuStateQuality
 [JsonConverter(typeof(JsonStringEnumConverter<GpuReasonCode>))]
 public enum GpuReasonCode
 {
-    /// <summary>The command or observation belongs to an old generation.</summary>
-    GenerationChanged,
-
     /// <summary>The driver session is unavailable.</summary>
     DriverUnavailable,
 
     /// <summary>A required driver, DLL or service is missing.</summary>
     PrerequisiteMissing,
 
-    /// <summary>Cancellation, deadline or lifecycle closed write admission.</summary>
+    /// <summary>Cancellation or lifecycle closed write admission.</summary>
     Quiescing,
 
     /// <summary>A native transport operation failed.</summary>
@@ -162,13 +159,7 @@ public enum GpuCommandOutcome
     Rejected,
 
     /// <summary>A write may have reached the driver before failure.</summary>
-    Indeterminate,
-
-    /// <summary>The caller's budget ended with an unknown write outcome.</summary>
-    TimedOut,
-
-    /// <summary>Saved for later application, without a current native write.</summary>
-    Accepted
+    Indeterminate
 }
 
 /// <summary>Current driver availability.</summary>
@@ -207,8 +198,5 @@ public enum GpuSectionKind
     Adapter,
 
     /// <summary>Display settings.</summary>
-    Display,
-
-    /// <summary>Another group of driver settings.</summary>
-    Other
+    Display
 }

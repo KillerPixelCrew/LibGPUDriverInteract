@@ -2,8 +2,6 @@
 
 using System.Globalization;
 using System.Runtime.InteropServices;
-using System.Security.Cryptography;
-using System.Text;
 using LibGPUDriverInteract.Runtime;
 
 namespace LibGPUDriverInteract.Amd;
@@ -29,8 +27,7 @@ internal sealed unsafe partial class AdlxSession : IDriverSession
     internal AdlxSession(Action<string, string> report)
     {
         _report = report;
-        _library = NativeLibrary.Load(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System),
-            "amdadlx64.dll"));
+        _library = SystemLibrary.Load("amdadlx64.dll");
         try
         {
             ulong runtimeVersion = 0;
@@ -119,11 +116,10 @@ internal sealed unsafe partial class AdlxSession : IDriverSession
                         return;
                     }
 
-                    var instance = "pci-" + Hash(pnp);
+                    var instance = "pci-" + DriverIds.Hash(pnp);
                     var section = "amd." + instance;
-                    var target = new AmdTarget(pnp, null, null);
                     var before = controls.Count;
-                    AddGraphics(gpu.Pointer, target, instance, section, objects, controls);
+                    AddGraphics(gpu.Pointer, instance, section, objects, controls);
                     if (controls.Count > before)
                     {
                         sections.Add(DriverDescriptors.Section(section, AdlxNative.Text(gpu.Pointer, 7)));
@@ -149,12 +145,11 @@ internal sealed unsafe partial class AdlxSession : IDriverSession
 
                         var id = AdlxNative.Size(display.Pointer, 13);
                         var edid = AdlxNative.Text(display.Pointer, 7);
-                        var target = new AmdTarget(pnp, id, edid);
                         var instance = (AdlxNative.Integer(display.Pointer, 5) == 15 ? "internal-" : "output-")
-                                       + Hash(pnp + "/" + id + "/" + edid);
+                                       + DriverIds.Hash(pnp + "/" + id + "/" + edid);
                         var section = "amd." + instance;
                         var before = controls.Count;
-                        AddDisplay(display.Pointer, target, instance, section, objects, controls);
+                        AddDisplay(display.Pointer, instance, section, objects, controls);
                         if (controls.Count > before)
                         {
                             sections.Add(DriverDescriptors.Section(section,
@@ -180,9 +175,7 @@ internal sealed unsafe partial class AdlxSession : IDriverSession
     public GpuProfileSyncResult Sync(GpuProfileSync sync, WriteAdmission admission,
         CancellationToken token)
     {
-        token.ThrowIfCancellationRequested();
-        // ADLX controls are GPU-wide. WSGM applies/restores Switched values using its existing game identity.
-        return new GpuProfileSyncResult(0, 0, []);
+        return SyncProfiles(sync, token);
     }
 
     /// <inheritdoc />
@@ -213,40 +206,14 @@ internal sealed unsafe partial class AdlxSession : IDriverSession
         }
     }
 
-    internal void Validate(AmdTarget target)
+    internal static GpuProfileSyncResult SyncProfiles(GpuProfileSync sync, CancellationToken token)
     {
-        using var list = target.DisplayId is null
-            ? AdlxNative.Interface(_system, 1)
-            : AdlxNative.Interface(_displays!.Pointer, 4);
-        var items = AdlxNative.Items(list.Pointer);
-        try
-        {
-            foreach (var item in items)
-            {
-                if (target.DisplayId is null)
-                {
-                    if (AdlxNative.Text(item.Pointer, 9) == target.GpuPnp)
-                    {
-                        return;
-                    }
-                }
-                else if (AdlxNative.Size(item.Pointer, 13) == target.DisplayId &&
-                         AdlxNative.Text(item.Pointer, 7) == target.Edid)
-                {
-                    using var gpu = AdlxNative.Interface(item.Pointer, 12);
-                    if (AdlxNative.Text(gpu.Pointer, 9) == target.GpuPnp)
-                    {
-                        return;
-                    }
-                }
-            }
-        }
-        finally
-        {
-            Release(items);
-        }
-
-        throw new DriverFailure("The AMD adapter or display changed before the write; refresh its controls.");
+        token.ThrowIfCancellationRequested();
+        // ADLX controls are GPU-wide. The consumer applies/restores switched values for the active game.
+        return sync.Profiles.Any(profile => profile.Values.Count > 0)
+            ? DriverRuntime.SyncUnavailable(sync,
+                "ADLX controls are GPU-wide; native per-application profiles are not supported.")
+            : new GpuProfileSyncResult(0, 0, []);
     }
 
     private AdlxObject? Service(Func<AdlxObject?> get, string key)
@@ -275,11 +242,6 @@ internal sealed unsafe partial class AdlxSession : IDriverSession
         }
     }
 
-    private static string Hash(string value)
-    {
-        return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(value)))[..24].ToLowerInvariant();
-    }
-
     private static void Release(List<AdlxObject> objects)
     {
         for (var index = objects.Count - 1; index >= 0; index--)
@@ -290,8 +252,6 @@ internal sealed unsafe partial class AdlxSession : IDriverSession
         objects.Clear();
     }
 }
-
-internal sealed record AmdTarget(string GpuPnp, nuint? DisplayId, string? Edid);
 
 internal sealed class AdlxControl(
     GpuDescriptor descriptor,

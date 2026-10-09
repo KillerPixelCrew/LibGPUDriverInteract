@@ -6,7 +6,7 @@ namespace LibGPUDriverInteract.Amd;
 
 internal sealed partial class AdlxSession
 {
-    private void AddGraphics(nint gpu, AmdTarget target, string instance, string section,
+    private void AddGraphics(nint gpu, string instance, string section,
         List<AdlxObject> objects, List<DriverControl> controls)
     {
         if (_graphics is null)
@@ -81,11 +81,10 @@ internal sealed partial class AdlxSession
                     GpuProfileScope.GlobalOnly) with
                 {
                     Role = GpuRole.Action, ValueKind = GpuValueKind.None, SupportsRead = false,
-                    SupportsWrite = false, SupportsAction = true, Persistence = GpuPersistence.Volatile
+                    SupportsWrite = false, Persistence = GpuPersistence.Volatile
                 };
             controls.Add(new AdlxControl(descriptor, GpuValue.None, (_, admission) =>
             {
-                Validate(target);
                 RequireSupported(feature);
                 AdlxNative.Call(feature.Pointer, 4, admission);
             }));
@@ -147,7 +146,7 @@ internal sealed partial class AdlxSession
             }, 5);
         }
 
-        // Chill and FRTC are deliberately absent: WSGM/RTSS remain the frame-limit owner.
+        // Chill and FRTC are deliberately absent: the consumer remains the frame-limit owner.
         return;
 
         void Feature(nint owner, int slot, string id, Action<AdlxObject> build, int supported = 3)
@@ -169,7 +168,6 @@ internal sealed partial class AdlxSession
             controls.Add(new AdlxControl(DriverDescriptors.Toggle("graphics." + id, instance, label, section, scope),
                 () => GpuValue.Boolean(AdlxNative.Boolean(feature.Pointer, read)), (value, admission) =>
                 {
-                    Validate(target);
                     RequireSupported(feature, supported);
                     AdlxNative.SetBoolean(feature.Pointer, write, value.BooleanValue == true, admission);
                 }));
@@ -184,7 +182,6 @@ internal sealed partial class AdlxSession
                 () => GpuValue.Choice(AmdValue.Encode(AdlxNative.Integer(feature.Pointer, read))),
                 (value, admission) =>
                 {
-                    Validate(target);
                     RequireSupported(feature, supported);
                     AdlxNative.SetInteger(feature.Pointer, write, AmdValue.Decode(value), admission);
                 }));
@@ -200,7 +197,6 @@ internal sealed partial class AdlxSession
                     },
                 () => GpuValue.Integer(AdlxNative.Integer(feature.Pointer, read)), (value, admission) =>
                 {
-                    Validate(target);
                     RequireSupported(feature);
                     var current = AdlxNative.Range(feature.Pointer, range);
                     if (!Within(value.IntegerValue!.Value, current))

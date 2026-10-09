@@ -18,14 +18,18 @@ internal sealed unsafe partial class NvApi : INvProfiles, IDisposable
     internal const int ApplicationSize = 20492;
     internal const int ProfileSize = 4116;
     internal const int ColorSize = 24;
+    private readonly Dictionary<uint, DriverFailure> _colorFailures = [];
+    private readonly Dictionary<uint, byte[]> _colors = [];
+    private readonly Dictionary<uint, nint> _functions = [];
     private readonly delegate* unmanaged[Cdecl]<uint, nint> _query;
+    private readonly byte[] _settingBuffer = new byte[SettingSize];
+    private readonly byte[] _valuesBuffer = new byte[ValuesSize];
     private bool _initialized;
     private nint _library;
 
     internal NvApi()
     {
-        _library = NativeLibrary.Load(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System),
-            "nvapi64.dll"));
+        _library = SystemLibrary.Load("nvapi64.dll");
         try
         {
             _query = (delegate* unmanaged[Cdecl]<uint, nint>)NativeLibrary.GetExport(_library, "nvapi_QueryInterface");
@@ -80,8 +84,9 @@ internal sealed unsafe partial class NvApi : INvProfiles, IDisposable
 
     public void Save(WriteAdmission admission)
     {
+        var save = (delegate* unmanaged[Cdecl]<nint, int>)Function(0xfcbc7e14);
         admission.Check();
-        Check(((delegate* unmanaged[Cdecl]<nint, int>)Function(0xfcbc7e14))(Drs), "DRS SaveSettings", true);
+        Check(save(Drs), "DRS SaveSettings", true);
     }
 
     public nint GlobalProfile()
@@ -116,24 +121,26 @@ internal sealed unsafe partial class NvApi : INvProfiles, IDisposable
         Number(buffer, CurrentValueOffset, value);
         fixed (byte* pointer = buffer)
         {
+            var set = (delegate* unmanaged[Cdecl]<nint, nint, byte*, int>)Function(0x577dd202);
             admission.Check();
-            Check(((delegate* unmanaged[Cdecl]<nint, nint, byte*, int>)Function(0x577dd202))(Drs, profile, pointer),
+            Check(set(Drs, profile, pointer),
                 "DRS SetSetting", true);
         }
     }
 
     public void Inherit(nint profile, uint setting, WriteAdmission admission)
     {
+        var inherit = (delegate* unmanaged[Cdecl]<nint, nint, uint, int>)Function(0xe4a26362);
         admission.Check();
         // Delete this one user override. Predefined settings and every unrelated setting remain.
-        var status = ((delegate* unmanaged[Cdecl]<nint, nint, uint, int>)Function(0xe4a26362))(Drs, profile, setting);
+        var status = inherit(Drs, profile, setting);
         if (status != -160)
         {
             Check(status, "DRS DeleteProfileSetting", true);
         }
     }
 
-    public nint Application(string executable, bool create, string profileName)
+    public nint Application(string executable, bool create, string profileName, WriteAdmission admission)
     {
         if (executable.Length is 0 or > 260 || Path.GetFileName(executable) != executable
                                             || executable.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0 ||
@@ -185,8 +192,10 @@ internal sealed unsafe partial class NvApi : INvProfiles, IDisposable
         {
             fixed (byte* pointer = info)
             {
+                var createProfile = (delegate* unmanaged[Cdecl]<nint, byte*, nint*, int>)Function(0xcc176068);
+                admission.Check();
                 Check(
-                    ((delegate* unmanaged[Cdecl]<nint, byte*, nint*, int>)Function(0xcc176068))(Drs, pointer, &profile),
+                    createProfile(Drs, pointer, &profile),
                     "DRS CreateProfile", true);
             }
         }
@@ -197,7 +206,9 @@ internal sealed unsafe partial class NvApi : INvProfiles, IDisposable
 
         fixed (byte* pointer = app)
         {
-            Check(((delegate* unmanaged[Cdecl]<nint, nint, byte*, int>)Function(0x4347a9de))(Drs, profile, pointer),
+            var createApplication = (delegate* unmanaged[Cdecl]<nint, nint, byte*, int>)Function(0x4347a9de);
+            admission.Check();
+            Check(createApplication(Drs, profile, pointer),
                 "DRS CreateApplication", true);
         }
 
@@ -235,11 +246,55 @@ internal sealed unsafe partial class NvApi : INvProfiles, IDisposable
         return profile;
     }
 
+    public IReadOnlyList<NvNamedProfile> Profiles()
+    {
+        var profiles = new List<NvNamedProfile>();
+        var enumerate = (delegate* unmanaged[Cdecl]<nint, uint, nint*, int>)Function(0xbc371ee0);
+        for (uint index = 0;; index++)
+        {
+            nint profile = 0;
+            var status = enumerate(Drs, index, &profile);
+            if (status == -7) // NVAPI_END_ENUMERATION
+            {
+                return profiles;
+            }
+
+            Check(status, "DRS EnumProfiles");
+            profiles.Add(new NvNamedProfile(profile, ProfileName(profile)));
+        }
+    }
+
+    public void DeleteProfile(nint profile, WriteAdmission admission)
+    {
+        var deleteProfile = (delegate* unmanaged[Cdecl]<nint, nint, int>)Function(0x17093206);
+        admission.Check();
+        Check(deleteProfile(Drs, profile),
+            "DRS DeleteProfile", true);
+    }
+
+    internal void BeginPass()
+    {
+        _colors.Clear();
+        _colorFailures.Clear();
+        Load();
+    }
+
     internal nint Function(uint id)
     {
-        return _query(id) is var pointer && pointer != 0
+        return FunctionPointer(id) is var pointer && pointer != 0
             ? pointer
             : throw new DriverFailure($"NVAPI function 0x{id:X8} is unavailable.");
+    }
+
+    private nint FunctionPointer(uint id)
+    {
+        if (!_functions.TryGetValue(id, out var pointer))
+        {
+            pointer = _query(id);
+            _functions.Add(id, pointer);
+        }
+
+        return pointer;
     }
 
     internal HashSet<uint> SettingIds()
@@ -269,7 +324,8 @@ internal sealed unsafe partial class NvApi : INvProfiles, IDisposable
 
     internal uint[] Values(uint setting)
     {
-        var buffer = new byte[ValuesSize];
+        var buffer = _valuesBuffer;
+        Array.Clear(buffer);
         Number(buffer, 0, Version(ValuesSize, 1));
         uint count = 100;
         fixed (byte* pointer = buffer)
@@ -378,28 +434,6 @@ internal sealed unsafe partial class NvApi : INvProfiles, IDisposable
         }
     }
 
-    internal NvOutput RequireOutput(uint display)
-    {
-        return Displays().FirstOrDefault(output => output.Id == display)
-               ?? throw new DriverFailure("The NVIDIA output was disconnected or moved to another adapter.");
-    }
-
-    internal NvOutput RequireOutput(NvOutput expected)
-    {
-        var current = RequireOutput(expected.Id);
-        if (current.Gpu != expected.Gpu)
-        {
-            throw new DriverFailure("The NVIDIA adapter handles changed; its controls must be refreshed.", lost: true);
-        }
-
-        if (expected.Target is not null && (current.Target is null || !expected.Target.Matches(current.Target)))
-        {
-            throw new DriverFailure("The NVIDIA output's physical monitor changed before the write.");
-        }
-
-        return current;
-    }
-
     internal uint Vrr(uint display)
     {
         var data = new byte[24];
@@ -427,7 +461,7 @@ internal sealed unsafe partial class NvApi : INvProfiles, IDisposable
     }
 
     /// <summary>Reads the colour block (command 1) or asks whether one is supported (command 3).</summary>
-    /// <param name="display">Current NVAPI display id; the caller revalidates topology before native access.</param>
+    /// <param name="display">NVAPI display id captured by the session's topology discovery.</param>
     /// <param name="command">NV_COLOR_CMD value: 1 reads current color, 3 validates a complete proposed combination.</param>
     /// <param name="input">Native color-v5 buffer to clone, or null for a fresh zeroed query buffer.</param>
     /// <returns>
@@ -446,12 +480,39 @@ internal sealed unsafe partial class NvApi : INvProfiles, IDisposable
         return buffer;
     }
 
+    internal byte[] ReadColor(uint display)
+    {
+        if (_colorFailures.TryGetValue(display, out var failure))
+        {
+            throw failure;
+        }
+
+        if (!_colors.TryGetValue(display, out var data))
+        {
+            try
+            {
+                data = Color(display, 1);
+            }
+            catch (DriverFailure error)
+            {
+                _colorFailures.Add(display, error);
+                throw;
+            }
+
+            _colors.Add(display, data);
+        }
+
+        return data;
+    }
+
     /// <summary>Writes a colour block, checking admission immediately before the native call.</summary>
-    /// <param name="display">Revalidated NVAPI display id.</param>
+    /// <param name="display">NVAPI display id captured by the session's topology discovery.</param>
     /// <param name="data">Complete native color-v5 state; copied before the command/version fields are set.</param>
-    /// <param name="admission">Cancellation, deadline and live-session permission checked immediately before the setter.</param>
+    /// <param name="admission">Cancellation and live-session permission checked immediately before the setter.</param>
     internal void SetColor(uint display, byte[] data, WriteAdmission admission)
     {
+        _colors.Remove(display);
+        _colorFailures.Remove(display);
         var buffer = ColorBuffer(2, data);
         fixed (byte* pointer = buffer)
         {
@@ -485,7 +546,7 @@ internal sealed unsafe partial class NvApi : INvProfiles, IDisposable
 
     internal bool HasFunction(uint id)
     {
-        return _query(id) != 0;
+        return FunctionPointer(id) != 0;
     }
 
     internal static uint Version(int size, int revision)
@@ -503,9 +564,10 @@ internal sealed unsafe partial class NvApi : INvProfiles, IDisposable
         BinaryPrimitives.WriteUInt32LittleEndian(data.AsSpan(offset), value);
     }
 
-    private static byte[] NewSetting(uint setting)
+    private byte[] NewSetting(uint setting)
     {
-        var data = new byte[SettingSize];
+        var data = _settingBuffer;
+        Array.Clear(data);
         Number(data, 0, Version(SettingSize, 1));
         Number(data, SettingIdOffset, setting);
         return data;

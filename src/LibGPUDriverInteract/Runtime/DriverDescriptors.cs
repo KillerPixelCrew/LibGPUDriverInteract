@@ -1,9 +1,62 @@
-// SPDX-License-Identifier: MIT
+using LibGPUDriverInteract.Intel.Controls;
 
 namespace LibGPUDriverInteract.Runtime;
 
+/// <summary>Where a control sits and how the consumer carries it between games.</summary>
+/// <param name="SectionId">The declared section.</param>
+/// <param name="CategoryId">The section's category, or null.</param>
+/// <param name="Order">Placement within the category.</param>
+/// <param name="Scope">How the consumer carries a remembered value between games.</param>
+/// <param name="Timing">When a written value takes effect.</param>
+internal readonly record struct Placement(
+    string SectionId,
+    string? CategoryId,
+    int Order,
+    GpuProfileScope Scope = GpuProfileScope.Switched,
+    GpuApplyTiming Timing = GpuApplyTiming.Immediate)
+{
+    /// <summary>The placement a given number of rows further down.</summary>
+    /// <param name="rows">How many rows.</param>
+    /// <returns>The placement.</returns>
+    public Placement Plus(int rows)
+    {
+        return this with { Order = Order + rows };
+    }
+}
+
+/// <summary>Builds the package's descriptors in one shape.</summary>
+/// <remarks>
+///     Writable settings are persistent driver state. Read-only observations are volatile.
+/// </remarks>
 internal static class DriverDescriptors
 {
+    internal static bool Accepts(GpuDescriptor descriptor, GpuValue? value, IntegerRange? range = null)
+    {
+        if (descriptor.Role == GpuRole.Action)
+        {
+            return value is null;
+        }
+
+        if (!descriptor.SupportsWrite || value is null || value.Kind != descriptor.ValueKind)
+        {
+            return false;
+        }
+
+        return value.Kind switch
+        {
+            GpuValueKind.Boolean => value.BooleanValue is not null,
+            GpuValueKind.Choice => descriptor.Choices.Any(choice => choice.Value == value.ChoiceValue),
+            GpuValueKind.Integer when range is { } nativeRange => value.IntegerValue is { } integer
+                                                                  && nativeRange.Accepts(integer),
+            GpuValueKind.Integer => value.IntegerValue is { } number && descriptor.Minimum is { } minimum
+                                                                     && descriptor.Maximum is { } maximum &&
+                                                                     number >= minimum && number <= maximum
+                                                                     && (number - minimum) % (descriptor.Step ?? 1) ==
+                                                                     0,
+            _ => false
+        };
+    }
+
     internal static GpuSection Section(string id, string title, bool display = false)
     {
         return new GpuSection
@@ -16,52 +69,187 @@ internal static class DriverDescriptors
     internal static GpuDescriptor Toggle(string id, string instance, string label, string section,
         GpuProfileScope scope)
     {
-        return Base(id, instance, label, section, scope, GpuValueKind.Boolean, GpuRole.Toggle);
+        return Toggle(id, instance, label, new Placement(section, null, 0, scope,
+            scope == GpuProfileScope.NativePerApplication
+                ? GpuApplyTiming.NextApplicationStart
+                : GpuApplyTiming.Immediate));
     }
 
     internal static GpuDescriptor Choice(string id, string? instance, string label, string section,
         GpuProfileScope scope, IEnumerable<(string Id, string Label)> options)
     {
-        return Base(id, instance, label, section, scope, GpuValueKind.Choice, GpuRole.Choice) with
-        {
-            Choices = options.Select(option => new GpuChoice(option.Id, Label(option.Label))).ToArray()
-        };
+        return Base(id, instance, label, new Placement(section, null, 0, scope,
+                    scope == GpuProfileScope.NativePerApplication
+                        ? GpuApplyTiming.NextApplicationStart
+                        : GpuApplyTiming.Immediate),
+                GpuRole.Choice, GpuValueKind.Choice) with
+            {
+                Choices = options.Select(option => new GpuChoice(option.Id, Label(option.Label))).ToArray()
+            };
     }
 
     internal static GpuDescriptor Range(string id, string instance, string label, string section,
         GpuProfileScope scope, int minimum, int maximum, int step)
     {
-        return Base(id, instance, label, section, scope, GpuValueKind.Integer, GpuRole.Range) with
-        {
-            Minimum = minimum, Maximum = maximum, Step = step, Unit = GpuUnit.None
-        };
+        return Range(id, instance, label, IntegerRange.Linear(minimum, maximum, step), GpuUnit.None,
+            new Placement(section, null, 0, scope,
+                scope == GpuProfileScope.NativePerApplication
+                    ? GpuApplyTiming.NextApplicationStart
+                    : GpuApplyTiming.Immediate));
     }
 
     internal static GpuDescriptor ReadOnly(string id, string instance, string label, string section,
         IEnumerable<(string Id, string Label)> options)
     {
-        return Choice(id, instance, label, section, GpuProfileScope.GlobalOnly, options) with
+        return ReadOnly(Choice(id, instance, label, section, GpuProfileScope.GlobalOnly, options));
+    }
+
+    public static GpuDescriptor Toggle(
+        string id,
+        string? instance,
+        string label,
+        Placement placement,
+        GpuRole role = GpuRole.Toggle)
+    {
+        return Base(id, instance, label, placement, role, GpuValueKind.Boolean);
+    }
+
+    public static GpuDescriptor Choice(
+        string id,
+        string? instance,
+        string label,
+        IReadOnlyList<EnumMember> members,
+        Placement placement)
+    {
+        var choices = new GpuChoice[members.Count];
+        for (var index = 0; index < members.Count; index++)
         {
-            Role = GpuRole.ReadOnly, SupportsWrite = false
+            choices[index] = new GpuChoice(
+                members[index].Id,
+                Label(members[index].Label));
+        }
+
+        return Base(id, instance, label, placement, GpuRole.Choice, GpuValueKind.Choice) with
+        {
+            Choices = choices
         };
     }
 
-    private static GpuDescriptor Base(string id, string? instance, string label, string section,
-        GpuProfileScope scope, GpuValueKind kind, GpuRole role)
+    public static GpuDescriptor Range(
+        string id,
+        string? instance,
+        string label,
+        IntegerRange range,
+        GpuUnit unit,
+        Placement placement)
+    {
+        return Base(id, instance, label, placement, GpuRole.Range, GpuValueKind.Integer) with
+        {
+            Minimum = range.Minimum,
+            Maximum = range.Maximum,
+            Step = range.Step,
+            Unit = unit
+        };
+    }
+
+    /// <summary>A status the driver reports and nothing can set, as one of a fixed set of values.</summary>
+    /// <remarks>
+    ///     Read-only rows are one machine-wide observation: never carried between games, never written,
+    ///     and not kept by the driver across a restart.
+    /// </remarks>
+    /// <param name="id">Stable capability identity.</param>
+    /// <param name="instance">Adapter/display instance identity, or null for an uninstanced capability.</param>
+    /// <param name="label">Driver or package label, sanitized for host display.</param>
+    /// <param name="members">Allowed observed enum values and their display labels, in publication order.</param>
+    /// <param name="placement">Section, category and order; read-only policy overrides its profile scope and timing.</param>
+    /// <returns>A volatile, global-only choice descriptor that supports reads but no writes.</returns>
+    public static GpuDescriptor ReadOnlyChoice(
+        string id,
+        string? instance,
+        string label,
+        IReadOnlyList<EnumMember> members,
+        Placement placement)
+    {
+        return ReadOnly(Choice(id, instance, label, members, placement));
+    }
+
+    /// <summary>A number the driver reports and nothing can set.</summary>
+    /// <param name="id">Stable capability identity.</param>
+    /// <param name="instance">Adapter/display instance identity, or null for an uninstanced capability.</param>
+    /// <param name="label">Driver or package label, sanitized for host display.</param>
+    /// <param name="range">Inclusive integer bounds and step advertised for observation.</param>
+    /// <param name="unit">Display unit for the reported number.</param>
+    /// <param name="placement">Section, category and order; read-only policy overrides its profile scope and timing.</param>
+    /// <returns>A volatile, global-only integer descriptor that supports reads but no writes.</returns>
+    public static GpuDescriptor ReadOnlyRange(
+        string id,
+        string? instance,
+        string label,
+        IntegerRange range,
+        GpuUnit unit,
+        Placement placement)
+    {
+        return ReadOnly(Range(id, instance, label, range, unit, placement));
+    }
+
+    /// <summary>Makes a label safe to publish.</summary>
+    /// <param name="label">Plain text, possibly from the driver or Windows.</param>
+    /// <returns>
+    ///     The label without the control and bidirectional characters <see cref="PlainText" /> refuses,
+    ///     trimmed.
+    /// </returns>
+    public static string Label(string label)
+    {
+        var clean = label.Any(PlainText.IsUnsafe)
+            ? new string(label.Where(character => !PlainText.IsUnsafe(character)).ToArray())
+            : label;
+        return clean.Trim();
+    }
+
+    /// <summary>Makes a driver-supplied name a label, or uses a fallback when nothing usable is left.</summary>
+    /// <param name="name">The name the driver or Windows reported.</param>
+    /// <param name="fallback">The label to use instead.</param>
+    /// <returns>The label.</returns>
+    public static string Label(string? name, string fallback)
+    {
+        return name is null || Label(name) is not { Length: > 0 } label ? fallback : label;
+    }
+
+    private static GpuDescriptor ReadOnly(GpuDescriptor descriptor)
+    {
+        return descriptor with
+        {
+            Role = GpuRole.ReadOnly,
+            SupportsWrite = false,
+            Persistence = GpuPersistence.Volatile,
+            ProfileScope = GpuProfileScope.GlobalOnly,
+            ApplyTiming = GpuApplyTiming.Immediate
+        };
+    }
+
+    private static GpuDescriptor Base(
+        string id,
+        string? instance,
+        string label,
+        Placement placement,
+        GpuRole role,
+        GpuValueKind kind)
     {
         return new GpuDescriptor
         {
-            CapabilityId = id, InstanceId = instance, SectionId = section, Role = role, ValueKind = kind,
-            Label = Label(label), SupportsRead = true, SupportsWrite = true, ProfileScope = scope,
+            CapabilityId = id,
+            InstanceId = instance,
+            Role = role,
+            ValueKind = kind,
+            Label = Label(label),
+            SectionId = placement.SectionId,
+            CategoryId = placement.CategoryId,
+            SortOrder = placement.Order,
+            SupportsRead = true,
+            SupportsWrite = true,
             Persistence = GpuPersistence.DevicePersistent,
-            ApplyTiming = scope == GpuProfileScope.NativePerApplication
-                ? GpuApplyTiming.NextApplicationStart
-                : GpuApplyTiming.Immediate
+            ProfileScope = placement.Scope,
+            ApplyTiming = placement.Timing
         };
-    }
-
-    private static string Label(string text)
-    {
-        return new string(text.Where(character => !PlainText.IsUnsafe(character)).ToArray());
     }
 }

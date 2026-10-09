@@ -2,7 +2,7 @@ namespace LibGPUDriverInteract.Intel.Controls;
 
 /// <summary>One member of a driver enum or flag set, offered as a choice.</summary>
 /// <param name="Value">The driver's value.</param>
-/// <param name="Id">The stable choice value WSGM stores.</param>
+/// <param name="Id">The stable choice value the consumer stores.</param>
 /// <param name="Label">The plain label.</param>
 internal sealed record EnumMember(uint Value, string Id, string Label)
 {

@@ -25,7 +25,7 @@ public sealed class ApplicationProfileSynchronizerTests : IDisposable
     private const string Keys = $@"{ClassPath}\0000\3DKeys";
     private readonly MemoryRegistryNode _hive = new();
     private readonly TemporaryDirectory _state = new();
-    private static WriteAdmission Admission => new(CancellationToken.None, DriverDeadline.Never, static () => true);
+    private static WriteAdmission Admission => new(CancellationToken.None, static () => true);
 
     /// <inheritdoc />
     public void Dispose()
@@ -71,6 +71,19 @@ public sealed class ApplicationProfileSynchronizerTests : IDisposable
     }
 
     [Fact]
+    public void EmptyDesiredSetWithAnUnreadableJournalCannotClaimSuccessfulRemoval()
+    {
+        var path = Path.Combine(_state.Root, "application-profiles.v1.json");
+        File.WriteAllText(path, "broken");
+        var failure = Assert.Single(Create().Apply(new GpuProfileSync(1, []), Resolve,
+            CancellationToken.None, Admission).Failures);
+        Assert.Equal("driver", failure.ProfileId);
+        Assert.Contains("could not be read", failure.Detail);
+        Assert.Equal("broken", File.ReadAllText(path));
+        Assert.Empty(_hive.Create(Keys).GetValueNames());
+    }
+
+    [Fact]
     public void ADirectoryAtTheRecordPathIsPreservedWithoutChangingTheRegistry()
     {
         var path = Path.Combine(_state.Root, "application-profiles.v1.json");
@@ -107,16 +120,16 @@ public sealed class ApplicationProfileSynchronizerTests : IDisposable
     }
 
     [Fact]
-    public void RepeatedRevisionCannotRemoveAnAppliedOverride()
+    public void RepeatedRevisionAppliesTheLatestCompleteDesiredSet()
     {
         var key = _hive.Create(Keys);
         var synchronizer = Create();
         synchronizer.Apply(Sync(5, ("p1", "game.exe", "graphics.cmaa", "enhance")), Resolve,
             CancellationToken.None, Admission);
         var result = synchronizer.Apply(Sync(5), Resolve, CancellationToken.None, Admission);
-        Assert.Equal((0, 0), (result.Written, result.Removed));
-        Assert.NotNull(key.GetValue("game.exe_Cmaa"));
-        Assert.Single(synchronizer.Record.Entries);
+        Assert.Equal((0, 1), (result.Written, result.Removed));
+        Assert.Null(key.GetValue("game.exe_Cmaa"));
+        Assert.Empty(synchronizer.Record.Entries);
     }
 
     [Fact]
@@ -234,7 +247,7 @@ public sealed class ApplicationProfileSynchronizerTests : IDisposable
     }
 
     [Fact]
-    public void AnOlderRevisionIsSkipped()
+    public void RevisionOrderingIsOwnedByTheCallerAndTheDesiredSetStillApplies()
     {
         _hive.Create(Keys);
         var synchronizer = Create();
@@ -243,8 +256,8 @@ public sealed class ApplicationProfileSynchronizerTests : IDisposable
 
         var result = synchronizer.Apply(Sync(4), Resolve, CancellationToken.None, Admission);
 
-        Assert.Equal((0, 0), (result.Written, result.Removed));
-        Assert.Single(synchronizer.Record.Entries);
+        Assert.Equal((0, 1), (result.Written, result.Removed));
+        Assert.Empty(synchronizer.Record.Entries);
     }
 
     [Fact]
@@ -346,14 +359,14 @@ public sealed class ApplicationProfileSynchronizerTests : IDisposable
         _hive.Create($@"{ClassPath}\0000").Set("MatchingDeviceId", @"PCI\VEN_8086&DEV_4688");
         _hive.Create($@"{ClassPath}\0001").Set("MatchingDeviceId", @"pci\ven_10de&dev_2520");
 
-        var keys = ThreeDKeysLocator.Find(AdapterClassKey.Enumerate(_hive, ClassPath, IntelLog.None), 0x4688);
+        var keys = ThreeDKeysLocator.Find(AdapterClassKey.Enumerate(_hive, ClassPath, DriverLog.None), 0x4688);
 
         Assert.Equal([Keys], keys);
     }
 
     private ApplicationProfileSynchronizer Create()
     {
-        return new ApplicationProfileSynchronizer(_hive, _state.Root, IntelLog.None);
+        return new ApplicationProfileSynchronizer(_hive, _state.Root, DriverLog.None);
     }
 
     private INativeProfileTarget? Resolve(string capabilityId, string? instanceId)
@@ -387,7 +400,6 @@ public sealed class ApplicationProfileSynchronizerTests : IDisposable
     {
         return new GpuProfileSync(
             revision,
-            1,
             [
                 .. overrides.GroupBy(entry => (entry.Profile, entry.Executable)).Select(group =>
                     new GpuApplicationProfile(

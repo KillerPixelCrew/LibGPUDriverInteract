@@ -80,7 +80,7 @@ internal static unsafe class PowerSavingControls
         uint supported,
         string instance,
         Placement placement,
-        IntelLog log)
+        IDriverSink log)
     {
         List<IntelControl> controls = [];
         var order = 0;
@@ -97,7 +97,7 @@ internal static unsafe class PowerSavingControls
                 if ((supported & feature) != 0 && settings.Read(out _) == IgclResult.Success)
                 {
                     controls.Add(Toggle(settings, feature, source,
-                        Descriptors.Toggle($"display.{id}.{suffix}", instance, $"{name} ({label})",
+                        DriverDescriptors.Toggle($"display.{id}.{suffix}", instance, $"{name} ({label})",
                             placement.Plus(order++))));
                 }
             }
@@ -113,7 +113,7 @@ internal static unsafe class PowerSavingControls
             if (choices.Count > 1)
             {
                 controls.Add(new LowRefreshRateControl(lrr, psr, source, log,
-                    Descriptors.Choice($"display.lrr.{suffix}", instance, $"Low refresh rate ({label})", choices,
+                    DriverDescriptors.Choice($"display.lrr.{suffix}", instance, $"Low refresh rate ({label})", choices,
                         placement.Plus(order++)),
                     choices));
             }
@@ -126,14 +126,14 @@ internal static unsafe class PowerSavingControls
         }
 
         controls.Add(Toggle(dpst, FeatureDpst, SourceDc,
-            Descriptors.Toggle("display.dpst", instance, "Display power saving (on battery)",
+            DriverDescriptors.Toggle("display.dpst", instance, "Display power saving (on battery)",
                 placement.Plus(order++))));
         if (level.Data.Dpst.MaximumLevel > level.Data.Dpst.MinimumLevel)
         {
             var range = IntegerRange.Linear(level.Data.Dpst.MinimumLevel, level.Data.Dpst.MaximumLevel);
             controls.Add(new FieldControl<CtlPowerOptimizationSettings>(
                 dpst,
-                Descriptors.Range("display.dpst-level", instance, "Display power saving level", range,
+                DriverDescriptors.Range("display.dpst-level", instance, "Display power saving level", range,
                     GpuUnit.None, placement.Plus(order)),
                 static (control, settings) =>
                     ControlRead.Of(GpuValue.Integer(control.Range!.Value.ToInteger(settings.Data.Dpst.Level))),
@@ -238,14 +238,14 @@ internal static unsafe class PowerSavingControls
     /// </remarks>
     private sealed class LowRefreshRateControl : FieldControl<CtlPowerOptimizationSettings>
     {
-        private readonly IntelLog _log;
+        private readonly IDriverSink _log;
         private readonly IgclSource<CtlPowerOptimizationSettings> _psr;
 
         public LowRefreshRateControl(
             IgclSource<CtlPowerOptimizationSettings> lrr,
             IgclSource<CtlPowerOptimizationSettings> psr,
             int source,
-            IntelLog log,
+            IDriverSink log,
             GpuDescriptor descriptor,
             IReadOnlyList<EnumMember> members)
             : base(
@@ -379,7 +379,7 @@ internal static unsafe class LaceControls
         [
             new FieldControl<CtlLaceConfig>(
                 source,
-                Descriptors.Toggle("display.lace", instance, "Contrast enhancement (LACE)", placement),
+                DriverDescriptors.Toggle("display.lace", instance, "Contrast enhancement (LACE)", placement),
                 static (_, config) => ControlRead.Of(IntelControl.Boolean(config.Enabled != 0)),
                 (_, current, known, value) =>
                 {
@@ -403,7 +403,7 @@ internal static unsafe class LaceControls
                 true),
             new FieldControl<CtlLaceConfig>(
                 source,
-                Descriptors.Range("display.lace-level", instance, "Contrast enhancement strength",
+                DriverDescriptors.Range("display.lace-level", instance, "Contrast enhancement strength",
                     IntegerRange.Linear(0, 100), GpuUnit.Percent, placement.Plus(1)),
                 static (control, config) => (config.Trigger & TriggerFixed) == 0
                     ? ControlRead.Unavailable(FollowsAmbientLight)

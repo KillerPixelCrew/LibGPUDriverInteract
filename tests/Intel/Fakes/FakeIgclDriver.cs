@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using System.Runtime.InteropServices;
 using LibGPUDriverInteract.Intel.Graphics;
 using LibGPUDriverInteract.Intel.Igcl;
+using LibGPUDriverInteract.Runtime;
 
 namespace LibGPUDriverInteract.Intel.Tests.Fakes;
 
@@ -59,13 +60,13 @@ internal sealed unsafe class FakeIgclDriver
 
     internal IgclSession OpenSession()
     {
-        return IgclSession.TryOpen(IgclApi.Bind(Resolve, IntelLog.None)!, IntelLog.None)!;
+        return IgclSession.TryOpen(IgclApi.Bind(Resolve, DriverLog.None)!, DriverLog.None)!;
     }
 
-    internal IntelDriverEngine CreateEngine()
+    internal IntelSession CreateSession(string directory, IDriverSink sink)
     {
-        return new IntelDriverEngine(log => IgclApi.Bind(Resolve, log), Registry,
-            log => new IntelGraphicsMemoryTransport(Registry, AdapterClassKey.ClassPath, 0, log));
+        return new IntelSession(directory, sink, IgclApi.Bind(Resolve, sink)!, Registry,
+            new IntelGraphicsMemoryTransport(Registry, AdapterClassKey.ClassPath, 0, sink));
     }
 
     private nint Resolve(string name)

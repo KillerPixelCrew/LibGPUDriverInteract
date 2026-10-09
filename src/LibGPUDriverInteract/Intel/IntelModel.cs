@@ -1,5 +1,3 @@
-using System.Security.Cryptography;
-using System.Text.Json;
 using LibGPUDriverInteract.Intel.Controls;
 using LibGPUDriverInteract.Intel.Display;
 using LibGPUDriverInteract.Intel.Graphics;
@@ -40,7 +38,6 @@ internal sealed class IntelModel
         Category(PowerCategory, "Power savings", 3)
     ];
 
-    private readonly Dictionary<string, IntelControl> _controls;
     private readonly Dictionary<string, INativeProfileTarget> _targets;
 
     private IntelModel(
@@ -51,13 +48,6 @@ internal sealed class IntelModel
         Controls = controls;
         Sections = sections;
         _targets = targets;
-        _controls = controls.ToDictionary(control => control.Key, StringComparer.Ordinal);
-        PublishedDescriptors = [.. controls.Select(control => control.Descriptor)];
-        Fingerprint = Convert.ToHexString(SHA256.HashData(JsonSerializer.SerializeToUtf8Bytes(new
-        {
-            Sections,
-            Descriptors = PublishedDescriptors
-        })));
     }
 
     /// <summary>Every published control, in publication order.</summary>
@@ -66,43 +56,13 @@ internal sealed class IntelModel
     /// <summary>The declared sections.</summary>
     public IReadOnlyList<GpuSection> Sections { get; }
 
-    /// <summary>The descriptors, in publication order.</summary>
-    public IReadOnlyList<GpuDescriptor> PublishedDescriptors { get; }
-
-    /// <summary>A hash of the sections and descriptors, so an unchanged set is not published again.</summary>
-    public string Fingerprint { get; }
-
     /// <summary>The routing key of one capability instance.</summary>
     /// <param name="capabilityId">The capability id.</param>
     /// <param name="instanceId">The instance id.</param>
     /// <returns>The key.</returns>
     public static string Key(string capabilityId, string? instanceId)
     {
-        return $"{capabilityId}|{instanceId}";
-    }
-
-    public IntelControl? Find(string capabilityId, string? instanceId)
-    {
-        return _controls.GetValueOrDefault(Key(capabilityId, instanceId));
-    }
-
-    /// <summary>Omits controls the driver explicitly reported as unsupported during discovery.</summary>
-    /// <param name="unsupported">Routing keys whose startup support probes explicitly rejected their controls.</param>
-    /// <returns>
-    ///     This model when no control is removed, otherwise a new model omitting those controls and native-profile
-    ///     targets while retaining section declarations.
-    /// </returns>
-    public IntelModel WithoutControls(IReadOnlySet<string> unsupported)
-    {
-        var controls = Controls.Where(control => !unsupported.Contains(control.Key)).ToArray();
-        if (controls.Length == Controls.Count)
-        {
-            return this;
-        }
-
-        var targets = _targets.Where(target => !unsupported.Contains(target.Key))
-            .ToDictionary(target => target.Key, target => target.Value, StringComparer.Ordinal);
-        return new IntelModel(controls, Sections, targets);
+        return DriverIds.Key(capabilityId, instanceId);
     }
 
     public INativeProfileTarget? FindTarget(string capabilityId, string? instanceId)
@@ -125,7 +85,7 @@ internal sealed class IntelModel
         IntelGraphicsMemoryTransport memory,
         ColorStore colors,
         IReadOnlyList<AdapterClassEntry> adapterKeys,
-        IntelLog log)
+        IDriverSink log)
     {
         List<IntelControl> controls = [];
         List<GpuSection> sections = [];
@@ -136,7 +96,7 @@ internal sealed class IntelModel
         {
             var instance = AdapterInstance(adapter);
             var sectionId = several ? $"graphics-{adapter.Index}" : "graphics";
-            var title = several ? Descriptors.Label(adapter.Name, "Graphics") : "Graphics";
+            var title = several ? DriverDescriptors.Label(adapter.Name, "Graphics") : "Graphics";
             List<IntelControl> built = [];
             Dictionary<string, INativeProfileTarget> builtTargets = new(StringComparer.Ordinal);
             BuildAdapter(session, adapter, instance, sectionId, adapterKeys, built, builtTargets, log);
@@ -160,8 +120,9 @@ internal sealed class IntelModel
 
         // The built-in panel first, so the variable refresh role goes to it when it has variable refresh and
         // its section gets the lowest sort order among the displays.
+        var topology = session.Outputs.Count == 0 ? null : DisplayIdentityResolver.Capture(log);
         var ordered = session.Outputs
-            .Select(output => (Output: output, Identity: DisplayIdentityResolver.Resolve(output, log)))
+            .Select(output => (Output: output, Identity: DisplayIdentityResolver.Resolve(output, log, topology)))
             .OrderByDescending(entry => entry.Identity.Internal)
             .ToArray();
         foreach (var (output, identity) in ordered)
@@ -169,7 +130,7 @@ internal sealed class IntelModel
             var name = identity.Name;
             for (var suffix = 2; !names.Add(name); suffix++)
             {
-                name = Descriptors.Label($"{identity.Name} {suffix}");
+                name = DriverDescriptors.Label($"{identity.Name} {suffix}");
             }
 
             var sectionId = $"display-{ValueMapping.Fingerprint(identity.InstanceId)}";
@@ -257,7 +218,7 @@ internal sealed class IntelModel
         IReadOnlyList<AdapterClassEntry> adapterKeys,
         List<IntelControl> controls,
         Dictionary<string, INativeProfileTarget> targets,
-        IntelLog log)
+        IDriverSink log)
     {
         var registryKeys = ThreeDKeysLocator.Find(adapterKeys, adapter.PciDeviceId);
         var table = session.Read3dCapabilities(adapter);
@@ -381,7 +342,7 @@ internal sealed class IntelModel
         Ctl3dFeatureDetails details,
         ThreeDFeatureInfo info,
         FeatureShape shape,
-        IntelLog log)
+        IDriverSink log)
     {
         switch (shape)
         {
@@ -450,7 +411,7 @@ internal sealed class IntelModel
         ref bool semanticVrrTaken,
         ColorStore colors,
         List<IntelControl> controls,
-        IntelLog log)
+        IDriverSink log)
     {
         var instance = identity.InstanceId;
         if (ArcSyncDisplay.TryCreate(session, output, log, identity.Name) is { } arcSync)

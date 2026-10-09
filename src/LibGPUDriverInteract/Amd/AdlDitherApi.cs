@@ -16,8 +16,7 @@ internal sealed unsafe class AdlDitherApi : IDisposable
 
     internal AdlDitherApi()
     {
-        _library = NativeLibrary.Load(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System),
-            "atiadlxx.dll"));
+        _library = SystemLibrary.Load("atiadlxx.dll");
         try
         {
             _get = (delegate* unmanaged[Cdecl]<nint, int, int, int*, int>)NativeLibrary.GetExport(_library,

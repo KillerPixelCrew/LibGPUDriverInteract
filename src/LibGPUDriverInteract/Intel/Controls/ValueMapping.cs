@@ -35,7 +35,7 @@ internal readonly record struct IntegerRange(
     /// <param name="value">The driver value.</param>
     /// <returns>The integer, clamped into the offered range and snapped to the nearest step on it.</returns>
     /// <remarks>
-    ///     WSGM's router refuses a state whose integer is off the descriptor's step grid, so a driver value
+    ///     the consumer's router refuses a state whose integer is off the descriptor's step grid, so a driver value
     ///     between two steps is published as the nearest step rather than as itself.
     /// </remarks>
     public int ToInteger(double value)
@@ -70,7 +70,7 @@ internal readonly record struct IntegerRange(
     }
 }
 
-/// <summary>Maps driver ranges and enums onto WSGM's integer and choice shapes.</summary>
+/// <summary>Maps driver ranges and enums onto the consumer's integer and choice shapes.</summary>
 internal static class ValueMapping
 {
     /// <summary>The finest scale a float range is published at.</summary>

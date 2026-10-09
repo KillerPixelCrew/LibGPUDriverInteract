@@ -21,7 +21,7 @@ public sealed class IntelGraphicsMemoryTests
     private const ulong ThirtyTwoGigabytes = 33_866_657_792;
 
     private readonly MemoryRegistryNode _hive = new();
-    private static WriteAdmission Admission => new(CancellationToken.None, DriverDeadline.Never, static () => true);
+    private static WriteAdmission Admission => new(CancellationToken.None, static () => true);
 
     [Fact]
     public void AnIntelAdapterWithThePinningLimitIsFound()
@@ -113,7 +113,7 @@ public sealed class IntelGraphicsMemoryTests
         WriteAdapter("0001", "Intel Corporation", "32.0.101.8992", 57);
         var transport = Open();
         using var cancellation = new CancellationTokenSource();
-        var admission = new WriteAdmission(cancellation.Token, DriverDeadline.Never, static () => true);
+        var admission = new WriteAdmission(cancellation.Token, static () => true);
         _hive.Create($@"{ClassPath}\0001").BeforeCreateSubKey = cancellation.Cancel;
 
         Assert.Throws<DriverFailure>(() => transport.TryWrite(44, admission, out _));

@@ -1,6 +1,6 @@
 namespace LibGPUDriverInteract.Intel.Display;
 
-/// <summary>The five colour controls, in the integers WSGM publishes.</summary>
+/// <summary>The five colour controls, in the integers the consumer publishes.</summary>
 /// <param name="Brightness">-25 to 25, zero neutral: an offset of that many hundredths.</param>
 /// <param name="Contrast">75 to 125, 100 neutral: a gain in percent.</param>
 /// <param name="Gamma">80 to 130, 100 neutral: the curve exponent is 100 divided by it.</param>
@@ -88,7 +88,7 @@ internal static class ColorMath
         }
     }
 
-    /// <summary>Whether what the driver reports matches what WSGM computed.</summary>
+    /// <summary>Whether what the driver reports matches what the consumer computed.</summary>
     /// <param name="expected">The computed curve channel or matrix.</param>
     /// <param name="actual">What the driver reported, of the same length.</param>
     /// <returns><see langword="true" /> within <see cref="Tolerance" /> at every entry.</returns>

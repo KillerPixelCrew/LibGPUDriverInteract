@@ -1,7 +1,7 @@
-using LibGPUDriverInteract.Intel.Controls;
 using LibGPUDriverInteract.Intel.Display;
 using LibGPUDriverInteract.Intel.Igcl;
 using LibGPUDriverInteract.Intel.Tests.Fakes;
+using LibGPUDriverInteract.Runtime;
 using Xunit;
 
 namespace LibGPUDriverInteract.Intel.Tests;
@@ -90,7 +90,7 @@ public sealed class ArcSyncTests
         var driver = new FakeIgclDriver { MinimumHz = minimum, MaximumHz = maximum };
         using var session = driver.OpenSession();
         var output = new IgclOutput(3, Assert.Single(session.Adapters), 0, default, true);
-        var display = ArcSyncDisplay.TryCreate(session, output, IntelLog.None, "Fixture")!;
+        var display = ArcSyncDisplay.TryCreate(session, output, DriverLog.None, "Fixture")!;
         var control = new ArcSyncProfileControl(display, "display-fixture", new Placement("display", "refresh", 0));
         Assert.Equal(custom, control.Descriptor.Choices.Any(choice => choice.Value == "custom"));
         session.Dispose();

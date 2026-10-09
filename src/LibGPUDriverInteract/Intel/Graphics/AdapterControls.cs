@@ -17,7 +17,7 @@ internal sealed class SharedMemoryControl : IntelControl
     private readonly IntelGraphicsMemoryTransport _transport;
 
     public SharedMemoryControl(IntelGraphicsMemoryTransport transport, string instance, Placement placement)
-        : base(Descriptors.Range(
+        : base(DriverDescriptors.Range(
             "graphics.shared-memory",
             instance,
             "Shared GPU memory",
@@ -116,7 +116,7 @@ internal static unsafe class RetroScalingControl
                     current.Get = 0;
                     return current;
                 }),
-            Descriptors.Choice("graphics.retro-scaling", instance, "Retro scaling", choices, placement),
+            DriverDescriptors.Choice("graphics.retro-scaling", instance, "Retro scaling", choices, placement),
             static (control, settings) => ControlRead.Of(control.MemberOf(settings.Enable == 0
                 ? 0
                 : (settings.RetroScalingType & NearestNeighbour) != 0

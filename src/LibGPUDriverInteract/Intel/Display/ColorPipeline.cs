@@ -4,7 +4,7 @@ using LibGPUDriverInteract.Runtime;
 
 namespace LibGPUDriverInteract.Intel.Display;
 
-/// <summary>The colour values WSGM last wrote per display, kept so a restart can recognise them.</summary>
+/// <summary>The colour values the consumer last wrote per display, kept so a restart can recognise them.</summary>
 /// <remarks>
 ///     The driver hands back the LUT and matrix it holds, not the settings behind them, and no inverse
 ///     is exact. So the plugin records what it wrote and, at start, accepts that record only when the
@@ -15,18 +15,18 @@ internal sealed class ColorStore
 {
     private const string Scope = "color";
     private const string What = "colour record";
-    private readonly IntelLog _log;
+    private readonly IDriverSink _log;
     private readonly string? _path;
     private readonly Dictionary<string, ColorSettings> _settings;
 
-    private ColorStore(string? path, Dictionary<string, ColorSettings> settings, IntelLog log)
+    private ColorStore(string? path, Dictionary<string, ColorSettings> settings, IDriverSink log)
     {
         _path = path;
         _settings = settings;
         _log = log;
     }
 
-    public static ColorStore Load(string? directory, IntelLog log)
+    public static ColorStore Load(string? directory, IDriverSink log)
     {
         var path = directory is null ? null : Path.Combine(directory, "color.v1.json");
         var settings = new Dictionary<string, ColorSettings>(StringComparer.Ordinal);
@@ -73,7 +73,7 @@ internal sealed class ColorStore
         }
         catch (Exception error) when (error is IOException or UnauthorizedAccessException)
         {
-            _log.Error(Scope, $"The {What} could not be saved: {IntelLog.Describe(error)}");
+            _log.Error(Scope, $"The {What} could not be saved: {DriverLog.Describe(error)}");
         }
     }
 }
@@ -172,7 +172,7 @@ internal sealed unsafe class ColorPipeline
 
     private readonly string _curveKey;
     private readonly string _display;
-    private readonly IntelLog _log;
+    private readonly IDriverSink _log;
     private readonly CtlPixTxBlockConfig _lutBlock;
     private readonly CtlPixTxBlockConfig? _matrixBlock;
     private readonly string _matrixKey;
@@ -196,7 +196,7 @@ internal sealed unsafe class ColorPipeline
         CtlPixTxBlockConfig lutBlock,
         CtlPixTxBlockConfig? matrixBlock,
         ColorStore store,
-        IntelLog log)
+        IDriverSink log)
     {
         _session = session;
         _output = output;
@@ -271,7 +271,7 @@ internal sealed unsafe class ColorPipeline
         IgclOutput output,
         string display,
         ColorStore store,
-        IntelLog log)
+        IDriverSink log)
     {
         var api = session.Api;
         if (api.PixTxGetConfig is null || api.PixTxSetConfig is null)
@@ -342,7 +342,7 @@ internal sealed unsafe class ColorPipeline
 
     /// <summary>Reads one field.</summary>
     /// <param name="field">The field.</param>
-    /// <returns>The value, or unknown when the driver holds something WSGM cannot name.</returns>
+    /// <returns>The value, or unknown when the driver holds something the consumer cannot name.</returns>
     public ControlRead Read(ColorField field)
     {
         Observe(false);
@@ -360,7 +360,7 @@ internal sealed unsafe class ColorPipeline
     /// <param name="admission">Rechecked after preparatory reads and before the setter.</param>
     /// <returns>How the driver answered.</returns>
     /// <remarks>
-    ///     When the driver holds a curve or matrix WSGM did not write, its values are unknown and have
+    ///     When the driver holds a curve or matrix the consumer did not write, its values are unknown and have
     ///     been published as such, so the other fields of that block cannot be carried: the write starts
     ///     them from neutral and says so in the log.
     /// </remarks>
@@ -372,7 +372,7 @@ internal sealed unsafe class ColorPipeline
         {
             _log.Info(
                 "color",
-                $"{_display}: the driver holds a {(field.InMatrix ? "colour matrix" : "tone curve")} WSGM did not "
+                $"{_display}: the driver holds a {(field.InMatrix ? "colour matrix" : "tone curve")} the consumer did not "
                 + $"write; writing {field.Label.ToLowerInvariant()} replaces it and starts "
                 + $"{(field.InMatrix ? "hue and saturation" : "brightness, contrast and gamma")} from neutral.");
         }
@@ -419,8 +419,8 @@ internal sealed unsafe class ColorPipeline
                     ? record
                     : null;
             _log.Change(GpuLogLevel.Info, "color", _curveKey, _curve is null
-                ? "The display holds a tone curve WSGM did not write; brightness, contrast and gamma are unknown."
-                : "The display's tone curve is the identity or WSGM's own.");
+                ? "The display holds a tone curve the consumer did not write; brightness, contrast and gamma are unknown."
+                : "The display's tone curve is the identity or the consumer's own.");
         }
         else
         {
@@ -441,8 +441,8 @@ internal sealed unsafe class ColorPipeline
                     ? record
                     : null;
             _log.Change(GpuLogLevel.Info, "color", _matrixKey, _matrix is null
-                ? "The display holds a colour matrix WSGM did not write; hue and saturation are unknown."
-                : "The display's colour matrix is the identity or WSGM's own.");
+                ? "The display holds a colour matrix the consumer did not write; hue and saturation are unknown."
+                : "The display's colour matrix is the identity or the consumer's own.");
         }
         else if (_result == IgclResult.Success)
         {
@@ -607,7 +607,7 @@ internal sealed class ColorControl : IntelControl
             }
 
             controls.Add(new ColorControl(pipeline, field,
-                Descriptors.Range(field.Id, instance, field.Label, field.Range, field.Unit,
+                DriverDescriptors.Range(field.Id, instance, field.Label, field.Range, field.Unit,
                     placement.Plus(controls.Count))));
         }
 

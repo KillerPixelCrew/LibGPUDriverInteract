@@ -43,14 +43,14 @@ implementation. Migration into this library must preserve the behavior and its t
 - [WindowsDeviceControl](https://github.com/KillerPixelCrew/windows-device-control) owns generic
   Windows audio, radios, display topology, modes, Windows HDR and power policy.
 
-WSGM consumes this library directly through its graphics adapter and retains user profile, pin and
-journal identities. Its common Plugin SDK remains for independent extensions such as IR and
-third-party integrations.
+WSGM consumes this library through its native graphics publisher and retains application profile
+policy. NVIDIA uses fresh owned profile names and removes exact legacy WSGM profiles once. Its
+common Plugin SDK remains for independent extensions such as IR and third-party integrations.
 
 ## Build and use
 
 Clone with submodules so standalone builds have the pinned WindowsDeviceControl source dependency.
-When this repository is inside WSGM, the project reuses WSGM's sibling dependency.
+Standalone and WSGM builds use this repository's same pinned nested dependency.
 
 ```powershell
 git clone --recurse-submodules https://github.com/KillerPixelCrew/LibGPUDriverInteract.git
@@ -64,9 +64,9 @@ driver.StateChanged += state => PublishObservedValue(state);
 await driver.StartAsync(cancellationToken);
 ```
 
-[API.md](API.md) describes command admission, generations, events, caller budgets, native profile
-sync and safe retirement. Notifications run on the publishing thread; marshal UI work in the
-application. The caller supplies the state directory and chooses the driver/profile policy.
+[API.md](API.md) describes owner admission, events, cancellation, native profile sync and safe
+retirement. Notifications run on the publishing thread; marshal UI work in the application. The
+caller supplies the state directory and chooses the driver/profile policy.
 
 ## Contributions
 

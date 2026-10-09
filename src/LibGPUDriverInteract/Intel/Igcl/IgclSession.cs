@@ -1,5 +1,6 @@
 using System.Runtime.InteropServices;
 using System.Text;
+using LibGPUDriverInteract.Runtime;
 
 namespace LibGPUDriverInteract.Intel.Igcl;
 
@@ -69,10 +70,10 @@ internal sealed unsafe class IgclSession : IDisposable
     /// <summary><c>CTL_ENCODER_CONFIG_FLAG_INTERNAL_DISPLAY</c>.</summary>
     private const uint EncoderInternalDisplay = 1 << 0;
 
-    private readonly IntelLog _log;
+    private readonly IDriverSink _log;
     private nint _handle;
 
-    private IgclSession(IgclApi api, nint handle, IntelLog log)
+    private IgclSession(IgclApi api, nint handle, IDriverSink log)
     {
         Api = api;
         _handle = handle;
@@ -166,7 +167,7 @@ internal sealed unsafe class IgclSession : IDisposable
     /// <param name="api">The bound library.</param>
     /// <param name="log">Receives the decisions.</param>
     /// <returns>The session, or null when <c>ctlInit</c> or the enumeration failed.</returns>
-    public static IgclSession? TryOpen(IgclApi api, IntelLog log)
+    public static IgclSession? TryOpen(IgclApi api, IDriverSink log)
     {
         CtlInitArgs args = default;
         args.Size = (uint)sizeof(CtlInitArgs);

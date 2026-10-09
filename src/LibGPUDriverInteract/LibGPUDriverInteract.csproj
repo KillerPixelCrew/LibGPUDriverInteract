@@ -5,11 +5,9 @@
     <Version>0.1.0</Version>
     <Description>Standalone Intel, AMD and NVIDIA GPU driver controls.</Description>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
-    <WindowsDeviceControlProject Condition="Exists('../../../windows-device-control/src/WindowsDeviceControl/WindowsDeviceControl.csproj')">../../../windows-device-control/src/WindowsDeviceControl/WindowsDeviceControl.csproj</WindowsDeviceControlProject>
-    <WindowsDeviceControlProject Condition="'$(WindowsDeviceControlProject)' == ''">../../external/windows-device-control/src/WindowsDeviceControl/WindowsDeviceControl.csproj</WindowsDeviceControlProject>
   </PropertyGroup>
   <ItemGroup>
-    <ProjectReference Include="$(WindowsDeviceControlProject)" />
+    <ProjectReference Include="../../external/windows-device-control/src/WindowsDeviceControl/WindowsDeviceControl.csproj" />
     <InternalsVisibleTo Include="LibGPUDriverInteract.Tests" />
     <None Include="../../LICENSE" Link="LibGPUDriverInteract-LICENSE.txt" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     <None Include="../../PROVENANCE.md" Link="LibGPUDriverInteract-PROVENANCE.md" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />

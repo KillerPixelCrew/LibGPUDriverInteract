@@ -16,7 +16,7 @@ public sealed class ThreeDFeatureTests
         new(0, 0, 0x8086, 0x4688, 0, 2, 0, true, 0, "Intel(R) UHD Graphics", true);
 
     private static readonly Placement Placement = new("graphics", "frames", 0);
-    private static WriteAdmission Admission => new(CancellationToken.None, DriverDeadline.Never, static () => true);
+    private static WriteAdmission Admission => new(CancellationToken.None, static () => true);
 
     [Fact]
     public void AnOrdinalMaskOffersOnlyTheMembersItSets()
@@ -93,7 +93,7 @@ public sealed class ThreeDFeatureTests
     public void AGameProfileWritesItsTierTypeAndTheEnabledTier()
     {
         var feature = AppProfile(ThreeDFeatureCatalog.TierTypePerformance, (1u << 0) | (1u << 1));
-        var control = Assert.Single(ThreeDFeatureControl.Build(feature, Adapter, Placement, IntelLog.None));
+        var control = Assert.Single(ThreeDFeatureControl.Build(feature, Adapter, Placement, DriverLog.None));
         RawFeatureValue current = default;
         current.AppProfile.TierType = ThreeDFeatureCatalog.TierTypeCompatibility;
 
@@ -110,7 +110,7 @@ public sealed class ThreeDFeatureTests
     public void SeveralEnabledTiersDecodeAsUnknown()
     {
         var feature = AppProfile(ThreeDFeatureCatalog.TierTypeCompatibility, (1u << 0) | (1u << 1));
-        var control = Assert.Single(ThreeDFeatureControl.Build(feature, Adapter, Placement, IntelLog.None));
+        var control = Assert.Single(ThreeDFeatureControl.Build(feature, Adapter, Placement, DriverLog.None));
         RawFeatureValue raw = default;
         raw.AppProfile.EnabledTierProfiles = 0b11;
 
@@ -138,7 +138,7 @@ public sealed class ThreeDFeatureTests
         details.PerAppSupport = 1;
         ThreeDFeature feature = new(null!, Laptop, details,
             ThreeDFeatureCatalog.Describe(ThreeDFeatureCatalog.LiveState), FeatureShape.LiveState);
-        var controls = ThreeDFeatureControl.Build(feature, Adapter, Placement, IntelLog.None);
+        var controls = ThreeDFeatureControl.Build(feature, Adapter, Placement, DriverLog.None);
         RawFeatureValue raw = default;
         raw.LiveState.GraphicsApi = (1u << 2) | (uint)ThreeDFeatureCatalog.MiscLiveChange;
         raw.LiveState.TargetFps = 60;
@@ -250,7 +250,7 @@ public sealed class ThreeDFeatureTests
         details.ValueType = (int)IgclValueType.Custom;
         ThreeDFeature feature = new(null!, Laptop, details,
             ThreeDFeatureCatalog.Describe(ThreeDFeatureCatalog.EnduranceGaming), FeatureShape.Endurance);
-        var controls = ThreeDFeatureControl.Build(feature, Adapter, Placement, IntelLog.None);
+        var controls = ThreeDFeatureControl.Build(feature, Adapter, Placement, DriverLog.None);
         RawFeatureValue current = default;
         current.Endurance.Mode = 2;
 
@@ -266,7 +266,7 @@ public sealed class ThreeDFeatureTests
     public void AnEnumWithOneOfferedValueIsNotAControl()
     {
         var controls = ThreeDFeatureControl.Build(
-            Feature(Enum(ThreeDFeatureCatalog.Cmaa, 1UL << 0)), Adapter, Placement, IntelLog.None);
+            Feature(Enum(ThreeDFeatureCatalog.Cmaa, 1UL << 0)), Adapter, Placement, DriverLog.None);
 
         Assert.Empty(controls);
     }
@@ -313,6 +313,6 @@ public sealed class ThreeDFeatureTests
 
     private static ThreeDFeatureControl Single(Ctl3dFeatureDetails details)
     {
-        return Assert.Single(ThreeDFeatureControl.Build(Feature(details), Adapter, Placement, IntelLog.None));
+        return Assert.Single(ThreeDFeatureControl.Build(Feature(details), Adapter, Placement, DriverLog.None));
     }
 }

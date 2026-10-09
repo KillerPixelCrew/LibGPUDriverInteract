@@ -10,7 +10,7 @@ namespace LibGPUDriverInteract.Intel.Profiles;
 /// <param name="Name">The value name, <c>&lt;exe&gt;_&lt;Setting&gt;</c>.</param>
 internal sealed record RegistryValueName(string KeyPath, string Name);
 
-/// <summary>One override WSGM stored in the driver, and the registry values that hold it.</summary>
+/// <summary>One override the consumer stored in the driver, and the registry values that hold it.</summary>
 /// <param name="ProfileId">The game profile that last claimed it, for diagnostics.</param>
 /// <param name="Executable">The executable file name.</param>
 /// <param name="CapabilityId">The capability, or the per-application switch's record id.</param>
@@ -38,8 +38,8 @@ internal sealed record SyncEntry(
     }
 }
 
-/// <summary>What WSGM wrote, persisted in the plugin's state directory.</summary>
-/// <param name="Entries">Every override WSGM stored.</param>
+/// <summary>What the consumer wrote, persisted in the plugin's state directory.</summary>
+/// <param name="Entries">Every override the consumer stored.</param>
 internal sealed record SyncRecord(IReadOnlyList<SyncEntry> Entries)
 {
     public static SyncRecord Empty { get; } = new([]);
@@ -99,7 +99,7 @@ internal interface INativeApplicationSwitch
 }
 
 /// <summary>
-///     Keeps the driver's per-application profiles in line with WSGM's game profiles.
+///     Keeps the driver's per-application profiles in line with the consumer's game profiles.
 /// </summary>
 /// <remarks>
 ///     IGCL writes a per-application value when <c>ctlGetSet3DFeature</c> carries an application name,
@@ -126,7 +126,7 @@ internal sealed class ApplicationProfileSynchronizer
     /// <summary>What a switch entry records as written: the switch is only ever turned on.</summary>
     private const string SwitchWritten = "per-application";
 
-    private readonly IntelLog _log;
+    private readonly IDriverSink _log;
     private readonly string? _path;
     private readonly IRegistryNode _root;
 
@@ -137,13 +137,7 @@ internal sealed class ApplicationProfileSynchronizer
     /// <summary>Why the record could not be read, or null when it was read or is absent.</summary>
     private readonly string? _unreadable;
 
-    /// <summary>
-    ///     The newest sync applied in this process. WSGM's revision restarts with WSGM, so it is never
-    ///     compared with one from an earlier run.
-    /// </summary>
-    private long _appliedRevision = long.MinValue;
-
-    public ApplicationProfileSynchronizer(IRegistryNode root, string? stateDirectory, IntelLog log)
+    public ApplicationProfileSynchronizer(IRegistryNode root, string? stateDirectory, IDriverSink log)
     {
         _root = root;
         _path = stateDirectory is null ? null : Path.Combine(stateDirectory, FileName);
@@ -177,7 +171,7 @@ internal sealed class ApplicationProfileSynchronizer
         }
         catch (DriverFailure failure)
         {
-            // Without the record nothing WSGM wrote could be removed, so it is never replaced and nothing
+            // Without the record nothing the consumer wrote could be removed, so it is never replaced and nothing
             // per-application is changed. The global controls keep working.
             _unreadable = failure.Message;
             log.Warn(Scope, $"{failure.Message} Per-application Intel settings are left unchanged.");
@@ -188,7 +182,7 @@ internal sealed class ApplicationProfileSynchronizer
     public SyncRecord Record { get; private set; }
 
     /// <summary>Applies one complete sync.</summary>
-    /// <param name="sync">What WSGM wants.</param>
+    /// <param name="sync">What the consumer wants.</param>
     /// <param name="resolve">Finds the writer for a capability instance, or null when it has none.</param>
     /// <param name="cancellationToken">Stops between writes.</param>
     /// <param name="admission">Rechecked after preparatory reads and before each native setter.</param>
@@ -200,19 +194,12 @@ internal sealed class ApplicationProfileSynchronizer
     {
         if (_unreadable is not null)
         {
-            return new GpuProfileSyncResult(0, 0,
-            [
-                .. sync.Profiles.SelectMany(profile => profile.Executables.Select(executable =>
-                    new GpuProfileFailure(profile.ProfileId, executable, "",
-                        $"The Intel per-application record could not be read ({_unreadable}); nothing was changed.")))
-            ]);
-        }
-
-        // WSGM never repeats a revision, so the same one again has nothing new.
-        if (sync.Revision <= _appliedRevision)
-        {
-            _log.Info(Scope, $"Sync {sync.Revision} is older than the applied {_appliedRevision}; skipped.");
-            return new GpuProfileSyncResult(0, 0, []);
+            var detail = $"The Intel per-application record could not be read ({_unreadable}); nothing was changed.";
+            var refused = sync.Profiles.SelectMany(profile => profile.Executables.Select(executable =>
+                new GpuProfileFailure(profile.ProfileId, executable, "", detail))).ToArray();
+            return new GpuProfileSyncResult(0, 0, refused.Length > 0
+                ? refused
+                : [new GpuProfileFailure("driver", "", "", detail)]);
         }
 
         _snapshots.Clear();
@@ -326,7 +313,6 @@ internal sealed class ApplicationProfileSynchronizer
         }
 
         var removed = Remove(entries, wanted, failures, cancellationToken, admission);
-        _appliedRevision = sync.Revision;
         _log.Info(Scope, $"Sync {sync.Revision}: {written} written, {removed} removed, {failures.Count} refused.");
         return new GpuProfileSyncResult(written, removed, failures);
     }
@@ -384,7 +370,7 @@ internal sealed class ApplicationProfileSynchronizer
             }
             catch (Exception error) when (AdapterClassKey.IsRegistryFailure(error))
             {
-                _log.Warn(Scope, $"Listing {path} failed: {IntelLog.Describe(error)}");
+                _log.Warn(Scope, $"Listing {path} failed: {DriverLog.Describe(error)}");
             }
         }
 
@@ -562,7 +548,7 @@ internal sealed class ApplicationProfileSynchronizer
                     // The stale entry is harmless: its names are gone and a later delete ignores them.
                     failures.Add(new GpuProfileFailure(entry.ProfileId, entry.Executable,
                         entry.CapabilityId,
-                        $"Removed from the driver, but WSGM could not update its record ({unsaved})."));
+                        $"Removed from the driver, but the consumer could not update its record ({unsaved})."));
                 }
                 else
                 {
@@ -593,10 +579,10 @@ internal sealed class ApplicationProfileSynchronizer
         }
         catch (Exception error) when (AdapterClassKey.IsRegistryFailure(error))
         {
-            _log.Warn(Scope, $"Deleting {name.Name} failed: {IntelLog.Describe(error)}");
+            _log.Warn(Scope, $"Deleting {name.Name} failed: {DriverLog.Describe(error)}");
             return error is UnauthorizedAccessException
-                ? "Registry access was denied; WSGM needs elevation."
-                : IntelLog.Describe(error);
+                ? "Registry access was denied; the consumer needs elevation."
+                : DriverLog.Describe(error);
         }
     }
 
@@ -619,14 +605,14 @@ internal sealed class ApplicationProfileSynchronizer
         }
         catch (Exception error) when (error is IOException or UnauthorizedAccessException)
         {
-            _log.Warn(Scope, $"The {What} could not be saved: {IntelLog.Describe(error)}");
+            _log.Warn(Scope, $"The {What} could not be saved: {DriverLog.Describe(error)}");
             return error.Message;
         }
     }
 
     private static string NotRecorded(string reason)
     {
-        return $"Applied to the driver, but WSGM could not record it ({reason}); remove it in Intel Graphics "
+        return $"Applied to the driver, but the consumer could not record it ({reason}); remove it in Intel Graphics "
                + "Software if it stays after a restart.";
     }
 

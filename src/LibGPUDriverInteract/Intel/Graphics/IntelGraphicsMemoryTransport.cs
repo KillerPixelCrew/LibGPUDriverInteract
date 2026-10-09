@@ -64,15 +64,16 @@ internal sealed partial class IntelGraphicsMemoryTransport
     private static readonly Version FirstSupportedDriver = new(32, 0, 101, 6974);
 
     private readonly string? _adapterPath;
-    private readonly IntelLog _log;
+    private readonly IDriverSink _log;
     private readonly string? _memoryPath;
     private readonly IRegistryNode _root;
     private readonly ulong _totalPhysicalBytes;
 
     /// <summary>Resolves the adapter that carries the setting, without writing anything.</summary>
     /// <param name="log">Receives the decisions.</param>
-    public IntelGraphicsMemoryTransport(IntelLog log)
-        : this(WindowsRegistryNode.LocalMachine, AdapterClassKey.ClassPath, TotalPhysicalBytes(), log)
+    /// <param name="adapters">Display adapters already enumerated for this session, or null to enumerate.</param>
+    public IntelGraphicsMemoryTransport(IDriverSink log, IReadOnlyList<AdapterClassEntry>? adapters = null)
+        : this(WindowsRegistryNode.LocalMachine, AdapterClassKey.ClassPath, TotalPhysicalBytes(), log, adapters)
     {
     }
 
@@ -81,6 +82,7 @@ internal sealed partial class IntelGraphicsMemoryTransport
     /// <param name="classPath">The display adapter class key path below it.</param>
     /// <param name="totalPhysicalBytes">Total physical memory, or zero when unknown.</param>
     /// <param name="log">Receives the decisions.</param>
+    /// <param name="adapters">Display adapters already enumerated for this session, or null to enumerate.</param>
     /// <remarks>
     ///     The seam exists because the real key is machine-wide and under HKLM, which no test may write,
     ///     and no test writes the user's hive either. It changes where the transport looks, never what it
@@ -90,13 +92,14 @@ internal sealed partial class IntelGraphicsMemoryTransport
         IRegistryNode root,
         string classPath,
         ulong totalPhysicalBytes,
-        IntelLog? log = null)
+        IDriverSink? log = null,
+        IReadOnlyList<AdapterClassEntry>? adapters = null)
     {
         ArgumentNullException.ThrowIfNull(classPath);
         _root = root ?? throw new ArgumentNullException(nameof(root));
         _totalPhysicalBytes = totalPhysicalBytes;
-        _log = log ?? IntelLog.None;
-        _adapterPath = ResolveAdapter(classPath);
+        _log = log ?? DriverLog.None;
+        _adapterPath = ResolveAdapter(classPath, adapters);
         _memoryPath = _adapterPath is null ? null : $@"{_adapterPath}\{MemoryManagerSubkey}";
     }
 
@@ -134,7 +137,7 @@ internal sealed partial class IntelGraphicsMemoryTransport
         catch (Exception error) when (AdapterClassKey.IsRegistryFailure(error))
         {
             _log.Change(GpuLogLevel.Warn, "intel-memory", "read",
-                $"Reading the shared-memory split failed: {IntelLog.Describe(error)}");
+                $"Reading the shared-memory split failed: {DriverLog.Describe(error)}");
             return null;
         }
     }
@@ -183,7 +186,7 @@ internal sealed partial class IntelGraphicsMemoryTransport
         }
         catch (Exception error) when (AdapterClassKey.IsRegistryFailure(error))
         {
-            _log.Warn("intel-memory", $"Support discovery failed: {IntelLog.Describe(error)}");
+            _log.Warn("intel-memory", $"Support discovery failed: {DriverLog.Describe(error)}");
             return false;
         }
     }
@@ -238,9 +241,9 @@ internal sealed partial class IntelGraphicsMemoryTransport
         catch (Exception failure) when (AdapterClassKey.IsRegistryFailure(failure))
         {
             error = failure is UnauthorizedAccessException
-                ? "Registry access was denied; WSGM needs elevation."
-                : "The memory manager key could not be written: " + IntelLog.Describe(failure);
-            _log.Warn("intel-memory", $"Writing the shared-memory split failed: {IntelLog.Describe(failure)}");
+                ? "Registry access was denied; the consumer needs elevation."
+                : "The memory manager key could not be written: " + DriverLog.Describe(failure);
+            _log.Warn("intel-memory", $"Writing the shared-memory split failed: {DriverLog.Describe(failure)}");
             return false;
         }
     }
@@ -255,7 +258,7 @@ internal sealed partial class IntelGraphicsMemoryTransport
         catch (Exception error) when (AdapterClassKey.IsRegistryFailure(error))
         {
             _log.Warn("intel-memory",
-                $"The shared-memory write was accepted, but readback failed: {IntelLog.Describe(error)}");
+                $"The shared-memory write was accepted, but readback failed: {DriverLog.Describe(error)}");
             return false;
         }
     }
@@ -282,13 +285,14 @@ internal sealed partial class IntelGraphicsMemoryTransport
     ///     Finds the one Intel adapter that stores the setting.
     /// </summary>
     /// <param name="classPath">The display adapter class key path.</param>
+    /// <param name="adapters">The display-class snapshot captured for this discovery pass.</param>
     /// <returns>Its registry path below the root, or null when there is not exactly one.</returns>
     /// <remarks>
     ///     The adapter index is not fixed (<c>0001</c> on the Claw, <c>0000</c> elsewhere), so it is
     ///     matched rather than hard-coded. Two matching adapters is ambiguous rather than a reason to pick
     ///     one.
     /// </remarks>
-    private string? ResolveAdapter(string classPath)
+    private string? ResolveAdapter(string classPath, IReadOnlyList<AdapterClassEntry>? adapters)
     {
         if (_totalPhysicalBytes < MinimumSystemMemoryBytes)
         {
@@ -297,7 +301,7 @@ internal sealed partial class IntelGraphicsMemoryTransport
 
         List<AdapterClassEntry> supported = [];
         List<AdapterClassEntry> storing = [];
-        foreach (var entry in AdapterClassKey.Enumerate(_root, classPath, _log))
+        foreach (var entry in adapters ?? AdapterClassKey.Enumerate(_root, classPath, _log))
         {
             switch (Classify(_root, entry.Path))
             {

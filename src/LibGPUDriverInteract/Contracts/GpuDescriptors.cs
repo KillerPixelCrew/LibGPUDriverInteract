@@ -35,9 +35,6 @@ public sealed record GpuDescriptor
     /// <summary>Whether the driver exposes a setter.</summary>
     public bool SupportsWrite { get; init; }
 
-    /// <summary>Whether the control accepts a null-valued one-shot command.</summary>
-    public bool SupportsAction { get; init; }
-
     /// <summary>Inclusive integer minimum.</summary>
     public int? Minimum { get; init; }
 
@@ -103,15 +100,9 @@ public sealed record GpuCategory
     public int SortOrder { get; init; }
 }
 
-/// <summary>A complete replacement set of controls for one live cycle.</summary>
+/// <summary>A complete replacement set of current driver controls.</summary>
 public sealed record GpuDescriptorSet
 {
-    /// <summary>Increasing descriptor revision.</summary>
-    public required long Generation { get; init; }
-
-    /// <summary>Lifecycle cycle owning these controls.</summary>
-    public required long CycleGeneration { get; init; }
-
     /// <summary>Complete plain grouping metadata.</summary>
     public IReadOnlyList<GpuSection> Sections { get; init; } = [];
 

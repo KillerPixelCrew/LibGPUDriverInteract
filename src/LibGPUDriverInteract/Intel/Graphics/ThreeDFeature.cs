@@ -418,7 +418,7 @@ internal sealed class ThreeDFeatureControl : IntelControl
         ThreeDFeature feature,
         string instance,
         Placement placement,
-        IntelLog log)
+        IDriverSink log)
     {
         var id = ThreeDFeatureCatalog.CapabilityId(feature.Info);
         var label = feature.Info.Label;
@@ -555,7 +555,8 @@ internal sealed class ThreeDFeatureControl : IntelControl
         }
 
         controls.Add(new ThreeDFeatureControl(
-            Descriptors.Range("graphics.adaptive-balance-strength", instance, "Adaptive balance strength", strength,
+            DriverDescriptors.Range("graphics.adaptive-balance-strength", instance, "Adaptive balance strength",
+                strength,
                 GpuUnit.None, Scoped(feature, placement.Plus(2))),
             feature,
             static (control, raw) =>
@@ -572,14 +573,14 @@ internal sealed class ThreeDFeatureControl : IntelControl
         List<ThreeDFeatureControl> controls)
     {
         controls.Add(new ThreeDFeatureControl(
-            Descriptors.ReadOnlyChoice("graphics.live-api", instance, "Active graphics API",
+            DriverDescriptors.ReadOnlyChoice("graphics.live-api", instance, "Active graphics API",
                 ThreeDFeatureCatalog.LiveApis, placement),
             feature,
             static (control, raw) => control.MemberOf(ThreeDFeatureCatalog.LiveApi(raw.LiveState.GraphicsApi)),
             null,
             ThreeDFeatureCatalog.LiveApis));
         controls.Add(new ThreeDFeatureControl(
-            Descriptors.ReadOnlyRange("graphics.live-target-fps", instance, "Frame pacing target (FPS)",
+            DriverDescriptors.ReadOnlyRange("graphics.live-target-fps", instance, "Frame pacing target (FPS)",
                 IntegerRange.Linear(0, MaxLiveFps), GpuUnit.None, placement.Plus(1)),
             feature,
             static (_, raw) => raw.LiveState.TargetFps > MaxLiveFps
@@ -587,7 +588,7 @@ internal sealed class ThreeDFeatureControl : IntelControl
                 : GpuValue.Integer((int)raw.LiveState.TargetFps),
             null));
         controls.Add(new ThreeDFeatureControl(
-            Descriptors.ReadOnlyChoice("graphics.live-frame-pacing", instance, "Frame pacing status",
+            DriverDescriptors.ReadOnlyChoice("graphics.live-frame-pacing", instance, "Frame pacing status",
                 ThreeDFeatureCatalog.LiveFramePacing, placement.Plus(2)),
             feature,
             static (control, raw) => control.MemberOf(raw.LiveState.FramePacingStatus),
@@ -602,7 +603,7 @@ internal sealed class ThreeDFeatureControl : IntelControl
         string label,
         Placement placement,
         List<ThreeDFeatureControl> controls,
-        IntelLog log)
+        IDriverSink log)
     {
         var details = feature.Details;
         switch ((IgclValueType)details.ValueType)
@@ -658,7 +659,7 @@ internal sealed class ThreeDFeatureControl : IntelControl
                 }
 
                 controls.Add(new ThreeDFeatureControl(
-                    Descriptors.Range(id, instance, label, usable, GpuUnit.None, Scoped(feature, placement)),
+                    DriverDescriptors.Range(id, instance, label, usable, GpuUnit.None, Scoped(feature, placement)),
                     feature,
                     static (control, raw) => control.DecodeNumber(raw.Scalar),
                     static (control, ref raw, value) => raw.Scalar = control.EncodeNumber(value),
@@ -737,7 +738,7 @@ internal sealed class ThreeDFeatureControl : IntelControl
         Encoder encode)
     {
         return new ThreeDFeatureControl(
-            Descriptors.Toggle(id, instance, label, Scoped(feature, placement)),
+            DriverDescriptors.Toggle(id, instance, label, Scoped(feature, placement)),
             feature,
             decode,
             encode);
@@ -754,7 +755,7 @@ internal sealed class ThreeDFeatureControl : IntelControl
         Encoder encode)
     {
         return new ThreeDFeatureControl(
-            Descriptors.Choice(id, instance, label, members, Scoped(feature, placement)),
+            DriverDescriptors.Choice(id, instance, label, members, Scoped(feature, placement)),
             feature,
             decode,
             encode,

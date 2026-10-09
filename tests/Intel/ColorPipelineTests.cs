@@ -18,11 +18,12 @@ public sealed class ColorPipelineTests
         var driver = new FakeIgclDriver { ColorBlockCount = (uint)blocks };
         using var session = driver.OpenSession();
         var output = new IgclOutput(3, Assert.Single(session.Adapters), 0, default, true);
-        var pipeline = ColorPipeline.TryCreate(session, output, "display-fixture", ColorStore.Load(null, IntelLog.None),
-            IntelLog.None);
+        var pipeline = ColorPipeline.TryCreate(session, output, "display-fixture",
+            ColorStore.Load(null, DriverLog.None),
+            DriverLog.None);
         Assert.NotNull(pipeline);
         var probe = pipeline.ProbeSupport(false,
-            new WriteAdmission(CancellationToken.None, DriverDeadline.Never, () => true));
+            new WriteAdmission(CancellationToken.None, () => true));
         Assert.Equal(WriteStatus.Applied, probe.Status);
         Assert.Equal(GpuValue.Integer(ColorSettings.Neutral.Brightness),
             pipeline.Read(ColorField.Brightness).Value);
@@ -37,7 +38,7 @@ public sealed class ColorPipelineTests
         using var directory = new TemporaryDirectory();
         var path = Path.Combine(directory.Root, "color.v1.json");
         File.WriteAllText(path, "corrupt color record");
-        var store = ColorStore.Load(directory.Root, IntelLog.None);
+        var store = ColorStore.Load(directory.Root, DriverLog.None);
         var written = ColorSettings.Neutral with { Brightness = 5 };
         store.Set("display-fixture", written);
         Assert.Equal(written, store.Get("display-fixture"));
@@ -48,7 +49,7 @@ public sealed class ColorPipelineTests
     public void FailedColorSaveDoesNotUndoTheWrittenValue()
     {
         using var directory = new TemporaryDirectory();
-        var store = ColorStore.Load(directory.Root, IntelLog.None);
+        var store = ColorStore.Load(directory.Root, DriverLog.None);
         Directory.CreateDirectory(Path.Combine(directory.Root, "color.v1.json"));
         var written = ColorSettings.Neutral with { Brightness = 5 };
         store.Set("display-fixture", written);

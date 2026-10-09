@@ -38,10 +38,9 @@ internal sealed unsafe partial class NvApi
 
     internal void SetDither(NvOutput expected, NvDither data, WriteAdmission admission, bool preserveState = false)
     {
-        var output = RequireOutput(expected);
         var function = (delegate* unmanaged[Cdecl]<nint, uint, uint, uint, uint, int>)Function(0xdf0dfcdd);
         admission.Check();
-        Check(function(output.Gpu, output.Id, data.State, data.State == 0 && !preserveState ? 0 : data.Bits,
+        Check(function(expected.Gpu, expected.Id, data.State, data.State == 0 && !preserveState ? 0 : data.Bits,
             data.State == 0 && !preserveState ? 0 : data.Mode), "Disp_SetDitherControl", true);
     }
 }

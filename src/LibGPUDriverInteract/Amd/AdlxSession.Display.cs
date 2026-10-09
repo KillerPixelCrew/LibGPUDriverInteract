@@ -28,7 +28,7 @@ internal sealed unsafe partial class AdlxSession
         "Truncate 8 / dither 6", "Truncate 8 / frame modulation 6", "Dither 8 / frame modulation 6"
     ];
 
-    private void AddDisplay(nint display, AmdTarget target, string instance, string section,
+    private void AddDisplay(nint display, string instance, string section,
         List<AdlxObject> objects, List<DriverControl> controls)
     {
         var service = _displays!.Pointer;
@@ -83,7 +83,6 @@ internal sealed unsafe partial class AdlxSession
                     throw new DriverFailure("The Vari-Bright policy could not be read.");
                 }, (value, admission) =>
                 {
-                    Validate(target);
                     RequireSupported(feature);
                     AdlxNative.Call(feature.Pointer, 11 + AmdValue.Decode(value), admission);
                 }));
@@ -110,7 +109,6 @@ internal sealed unsafe partial class AdlxSession
                         return GpuValue.Choice(AmdValue.Encode(_dither.Read(current.Adapter, current.Display)));
                     }, (value, admission) =>
                     {
-                        Validate(target);
                         var current = AdlIds(display);
                         _dither.Write(current.Adapter, current.Display, AmdValue.Decode(value), admission);
                     }));
@@ -141,7 +139,6 @@ internal sealed unsafe partial class AdlxSession
                     },
                 () => GpuValue.Boolean(AdlxNative.Boolean(feature.Pointer, 4)), (value, admission) =>
                 {
-                    Validate(target);
                     RequireSupported(feature);
                     AdlxNative.SetBoolean(feature.Pointer, 5, value.BooleanValue == true, admission);
                 }));
@@ -161,7 +158,6 @@ internal sealed unsafe partial class AdlxSession
                 () => GpuValue.Choice(AmdValue.Encode(AdlxNative.Integer(feature.Pointer, read))),
                 (value, admission) =>
                 {
-                    Validate(target);
                     RequireSupported(feature);
                     var requested = AmdValue.Decode(value);
                     if (supportedValue is { } slot && !AdlxNative.SupportsValue(feature.Pointer, slot, requested))
@@ -180,7 +176,6 @@ internal sealed unsafe partial class AdlxSession
                     GpuProfileScope.GlobalOnly, bounds.Minimum, bounds.Maximum, bounds.Step),
                 () => GpuValue.Integer(AdlxNative.Integer(feature.Pointer, read)), (value, admission) =>
                 {
-                    Validate(target);
                     RequireSupported(feature, supported);
                     if (!Within(value.IntegerValue!.Value, AdlxNative.Range(feature.Pointer, range)))
                     {

@@ -1,6 +1,5 @@
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
-using LibGPUDriverInteract.Intel.Display;
 using LibGPUDriverInteract.Intel.Igcl;
 using Xunit;
 
@@ -194,12 +193,6 @@ public sealed class NativeLayoutTests
 
         Assert.Equal(4, value.Enable);
         Assert.Equal(0, value.IntValue);
-    }
-
-    [Fact]
-    public void TheTargetNameMatchesWindows()
-    {
-        Assert.Equal(420, Size<DisplayIdentityResolver.TargetDeviceName>());
     }
 
     private static int Size<T>()

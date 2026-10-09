@@ -1,4 +1,5 @@
 using System.Runtime.InteropServices;
+using LibGPUDriverInteract.Runtime;
 
 namespace LibGPUDriverInteract.Intel.Igcl;
 
@@ -97,9 +98,9 @@ internal sealed unsafe class IgclApi : IDisposable
     /// <summary>Loads the driver's library and binds its entry points.</summary>
     /// <param name="log">Receives what was missing, once per change, since a missing driver is retried.</param>
     /// <returns>The bound library, or null when it is absent or lacks a core entry point.</returns>
-    public static IgclApi? TryLoad(IntelLog log)
+    public static IgclApi? TryLoad(IDriverSink log)
     {
-        if (!NativeLibrary.TryLoad("ControlLib.dll", out var library))
+        if (!SystemLibrary.TryLoad("ControlLib.dll", out var library))
         {
             log.Change(GpuLogLevel.Info, "igcl", "library",
                 "ControlLib.dll is not present; the Intel driver is not installed.");
@@ -124,13 +125,13 @@ internal sealed unsafe class IgclApi : IDisposable
     /// </param>
     /// <param name="log">Receives missing-binding diagnostics.</param>
     /// <returns>The bound API, or null when a required export is absent; it owns no library handle.</returns>
-    internal static IgclApi? Bind(Func<string, nint> resolve, IntelLog log)
+    internal static IgclApi? Bind(Func<string, nint> resolve, IDriverSink log)
     {
         IgclApi api = new(0);
         return api.TryBind(log, resolve) ? api : null;
     }
 
-    private bool TryBind(IntelLog log, Func<string, nint> resolve)
+    private bool TryBind(IDriverSink log, Func<string, nint> resolve)
     {
         // Addresses first, cast at the end: a function-pointer type cannot be a generic argument, so
         // it cannot be threaded through one shared helper.

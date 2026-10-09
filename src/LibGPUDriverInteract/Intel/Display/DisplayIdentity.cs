@@ -1,6 +1,7 @@
-using System.Runtime.InteropServices;
 using LibGPUDriverInteract.Intel.Controls;
 using LibGPUDriverInteract.Intel.Igcl;
+using LibGPUDriverInteract.Runtime;
+using WindowsDeviceControl;
 
 namespace LibGPUDriverInteract.Intel.Display;
 
@@ -33,13 +34,10 @@ internal sealed record DisplayIdentity(string InstanceId, string Name, bool Inte
 ///         (internal, embedded DisplayPort, LVDS or embedded UDI) answers only when IGCL does not.
 ///     </para>
 /// </remarks>
-internal static unsafe partial class DisplayIdentityResolver
+internal static class DisplayIdentityResolver
 {
     /// <summary>The prefix of the built-in panel's instance id.</summary>
     public const string InternalPrefix = "internal-";
-
-    private const int DeviceInfoGetTargetName = 2;
-    private const uint FlagEdidIdsValid = 1 << 2;
 
     /// <summary><c>DISPLAYCONFIG_OUTPUT_TECHNOLOGY_INTERNAL</c>.</summary>
     private const uint OutputInternal = 0x80000000;
@@ -53,25 +51,39 @@ internal static unsafe partial class DisplayIdentityResolver
     /// <summary><c>DISPLAYCONFIG_OUTPUT_TECHNOLOGY_UDI_EMBEDDED</c>.</summary>
     private const uint OutputUdiEmbedded = 13;
 
-    /// <summary>Resolves one output.</summary>
-    /// <param name="output">The IGCL output.</param>
+    /// <summary>Captures Windows monitor identities once for discovery.</summary>
     /// <param name="log">Receives the fallback decisions.</param>
-    /// <returns>The identity; never null, falling back to a session-local id when Windows says nothing.</returns>
-    public static DisplayIdentity Resolve(IgclOutput output, IntelLog log)
+    /// <returns>The captured topology, or null when Windows cannot query it.</returns>
+    public static DisplayTopologySnapshot? Capture(IDriverSink log)
     {
-        TargetDeviceName name = default;
-        name.Header.Type = DeviceInfoGetTargetName;
-        name.Header.Size = (uint)sizeof(TargetDeviceName);
-        name.Header.AdapterLow = (uint)(output.Adapter.Luid & 0xffffffff);
-        name.Header.AdapterHigh = (int)(output.Adapter.Luid >> 32);
-        name.Header.Id = output.TargetId;
-        var status = DisplayConfigGetDeviceInfo(ref name);
-        if (status != 0)
+        try
+        {
+            return DisplayTopology.CaptureActive();
+        }
+        catch (Exception error) when (error is not OutOfMemoryException)
+        {
+            log.Warn("display", "Windows display identities are unavailable: " + error.Message);
+            return null;
+        }
+    }
+
+    /// <summary>Resolves one output against the session's captured Windows topology.</summary>
+    /// <param name="output">The IGCL output.</param>
+    /// <param name="log">Receives fallback decisions.</param>
+    /// <param name="topology">The capture for this discovery.</param>
+    /// <returns>A stable identity, or a session-local fallback when Windows has no matching output.</returns>
+    public static DisplayIdentity Resolve(IgclOutput output, IDriverSink log, DisplayTopologySnapshot? topology)
+    {
+        var path = topology?.Paths.FirstOrDefault(path =>
+            path.Target.AdapterLowPart == (uint)output.Adapter.Luid
+            && path.Target.AdapterHighPart == (int)(output.Adapter.Luid >> 32)
+            && path.Target.TargetId == output.TargetId);
+        if (path is null)
         {
             log.Warn(
                 "display",
                 $"Windows has no name for target {output.TargetId} on adapter {output.Adapter.Index} "
-                + $"(error {status}); its settings are not remembered across reboots.");
+                + "; its settings are not remembered across reboots.");
             var fallbackInternal = output.Internal == true;
             return new DisplayIdentity(
                 (fallbackInternal ? InternalPrefix : "") + $"adapter{output.Adapter.Index}-target{output.TargetId}",
@@ -79,19 +91,18 @@ internal static unsafe partial class DisplayIdentityResolver
                 fallbackInternal);
         }
 
-        var path = Text(name.DevicePath, 128);
-        var friendly = Text(name.FriendlyName, 64);
-
         // IGCL's encoder flag decides; Windows' output technology only answers when IGCL does not.
         var isInternal = output.Internal
-                         ?? name.OutputTechnology is OutputInternal or OutputDisplayPortEmbedded or OutputLvds
+                         ?? path.OutputTechnology is OutputInternal or OutputDisplayPortEmbedded or OutputLvds
                              or OutputUdiEmbedded;
-        var manufacturer = (name.Flags & FlagEdidIdsValid) != 0
-            ? ValueMapping.DecodeManufacturer(name.EdidManufactureId)
+        var manufacturer = path.Target.EdidManufacturerId is { } code
+            ? ValueMapping.DecodeManufacturer(code)
             : null;
-        var instance = InstanceId(isInternal, manufacturer, name.EdidProductCodeId,
-            path.Length > 0 ? path : $"target-{output.TargetId}");
-        var label = isInternal ? "Built-in display" : Descriptors.Label(friendly, $"Display {output.Index + 1}");
+        var instance = InstanceId(isInternal, manufacturer, path.Target.EdidProductCodeId ?? 0,
+            path.Target.DevicePath.Length > 0 ? path.Target.DevicePath : $"target-{output.TargetId}");
+        var label = isInternal
+            ? "Built-in display"
+            : DriverDescriptors.Label(path.Target.FriendlyName, $"Display {output.Index + 1}");
         return new DisplayIdentity(instance, label, isInternal);
     }
 
@@ -102,7 +113,7 @@ internal static unsafe partial class DisplayIdentityResolver
     /// <param name="path">The monitor device path the fingerprint is taken from.</param>
     /// <returns>
     ///     <c>edid-&lt;mfg&gt;&lt;product&gt;-&lt;fingerprint&gt;</c>, or <c>display-&lt;fingerprint&gt;</c>
-    ///     without EDID codes, prefixed with <c>internal-</c> for the built-in panel. WSGM's host gives
+    ///     without EDID codes, prefixed with <c>internal-</c> for the built-in panel. A consumer can give
     ///     Valve's single variable refresh row to an instance starting with <c>internal</c>.
     /// </returns>
     internal static string InstanceId(bool isInternal, string? manufacturer, ushort product, string path)
@@ -110,40 +121,5 @@ internal static unsafe partial class DisplayIdentityResolver
         var fingerprint = ValueMapping.Fingerprint(path);
         var id = manufacturer is null ? $"display-{fingerprint}" : $"edid-{manufacturer}{product:x4}-{fingerprint}";
         return isInternal ? InternalPrefix + id : id;
-    }
-
-    private static string Text(char* buffer, int length)
-    {
-        var span = new ReadOnlySpan<char>(buffer, length);
-        var end = span.IndexOf('\0');
-        return new string(end < 0 ? span : span[..end]);
-    }
-
-    [LibraryImport("user32.dll")]
-    private static partial int DisplayConfigGetDeviceInfo(ref TargetDeviceName request);
-
-    /// <summary><c>DISPLAYCONFIG_DEVICE_INFO_HEADER</c>, 20 bytes.</summary>
-    [StructLayout(LayoutKind.Sequential)]
-    internal struct DeviceInfoHeader
-    {
-        public int Type;
-        public uint Size;
-        public uint AdapterLow;
-        public int AdapterHigh;
-        public uint Id;
-    }
-
-    /// <summary><c>DISPLAYCONFIG_TARGET_DEVICE_NAME</c>, 420 bytes, pinned by <c>NativeLayoutTests</c>.</summary>
-    [StructLayout(LayoutKind.Sequential)]
-    internal struct TargetDeviceName
-    {
-        public DeviceInfoHeader Header;
-        public uint Flags;
-        public uint OutputTechnology;
-        public ushort EdidManufactureId;
-        public ushort EdidProductCodeId;
-        public uint ConnectorInstance;
-        public fixed char FriendlyName[64];
-        public fixed char DevicePath[128];
     }
 }

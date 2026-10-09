@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Security;
+using LibGPUDriverInteract.Runtime;
 
 namespace LibGPUDriverInteract.Intel.Graphics;
 
@@ -25,7 +26,7 @@ internal static class AdapterClassKey
     /// <param name="classPath">The class key path below it.</param>
     /// <param name="log">Receives an enumeration failure.</param>
     /// <returns>The adapters in key order; an unreadable one has a null device id.</returns>
-    public static IReadOnlyList<AdapterClassEntry> Enumerate(IRegistryNode root, string classPath, IntelLog log)
+    public static IReadOnlyList<AdapterClassEntry> Enumerate(IRegistryNode root, string classPath, IDriverSink log)
     {
         List<AdapterClassEntry> entries = [];
         try
@@ -59,7 +60,7 @@ internal static class AdapterClassKey
         }
         catch (Exception error) when (IsRegistryFailure(error))
         {
-            log.Warn("registry", $"Enumerating display adapters failed: {IntelLog.Describe(error)}");
+            log.Warn("registry", $"Enumerating display adapters failed: {DriverLog.Describe(error)}");
         }
 
         return entries;

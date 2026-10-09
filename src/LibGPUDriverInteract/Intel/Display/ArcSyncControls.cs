@@ -245,7 +245,7 @@ internal sealed class ArcSyncDisplay
     /// <param name="log">Receives the decision.</param>
     /// <param name="name">The display name for the trace.</param>
     /// <returns>The state, or null when variable refresh is not offered.</returns>
-    public static unsafe ArcSyncDisplay? TryCreate(IgclSession session, IgclOutput output, IntelLog log, string name)
+    public static unsafe ArcSyncDisplay? TryCreate(IgclSession session, IgclOutput output, IDriverSink log, string name)
     {
         var api = session.Api;
         if (api.GetArcSyncInfo is null || api.GetArcSyncProfile is null || api.SetArcSyncProfile is null)
@@ -413,7 +413,7 @@ internal sealed class VariableRefreshControl : IntelControl
     private readonly ArcSyncDisplay _display;
 
     public VariableRefreshControl(ArcSyncDisplay display, string instance, bool semantic, Placement placement)
-        : base(Descriptors.Toggle(
+        : base(DriverDescriptors.Toggle(
             "display.variable-refresh",
             instance,
             "Variable refresh rate",
@@ -479,7 +479,7 @@ internal sealed class ArcSyncProfileControl : IntelControl
         string instance,
         Placement placement,
         IReadOnlyList<EnumMember> profiles)
-        : base(Descriptors.Choice("display.arc-sync-profile", instance, "Arc Sync profile", profiles, placement),
+        : base(DriverDescriptors.Choice("display.arc-sync-profile", instance, "Arc Sync profile", profiles, placement),
             profiles)
     {
         _display = display;
@@ -575,7 +575,7 @@ internal sealed class ArcSyncParameterControl : IntelControl
         {
             var (minimum, maximum) = bounds.RangeOf(field);
             rows.Add(new ArcSyncParameterControl(display, bounds, field,
-                Descriptors.Range(field.Id, instance, field.Label, IntegerRange.Linear(minimum, maximum),
+                DriverDescriptors.Range(field.Id, instance, field.Label, IntegerRange.Linear(minimum, maximum),
                     GpuUnit.None, placement.Plus(rows.Count))));
         }
 

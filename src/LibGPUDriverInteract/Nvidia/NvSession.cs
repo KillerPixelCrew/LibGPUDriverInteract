@@ -1,8 +1,6 @@
 // SPDX-License-Identifier: MIT
 
 using System.Globalization;
-using System.Security.Cryptography;
-using System.Text;
 using LibGPUDriverInteract.Runtime;
 
 namespace LibGPUDriverInteract.Nvidia;
@@ -34,10 +32,26 @@ internal sealed class NvSession : IDriverSession
         }
     }
 
+    /// <summary>Cleans legacy profiles only while the explicit owner still admits native writes.</summary>
+    public void Initialize(WriteAdmission admission, CancellationToken token)
+    {
+        try
+        {
+            _profiles.Initialize(admission, token);
+        }
+        catch (Exception failure) when (admission.Admitted &&
+                                        failure is not OutOfMemoryException and not OperationCanceledException
+                                            and not DriverFailure { Lost: true })
+        {
+            _report("legacy-profiles", "Legacy profile cleanup did not complete: " + failure.Message);
+            _api.Load(); // Discard uncommitted DRS mutations before publishing otherwise usable controls.
+        }
+    }
+
     /// <summary>Loads the DRS database once; the pass's reads and the command's write use that state.</summary>
     public void BeginPass()
     {
-        _api.Load();
+        _api.BeginPass();
     }
 
     /// <inheritdoc />
@@ -113,9 +127,7 @@ internal sealed class NvSession : IDriverSession
         foreach (var output in outputs)
         {
             var instance = output.Target is { DevicePath.Length: > 0 } target
-                ? "output-" +
-                  Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(target.DevicePath.ToUpperInvariant())))
-                      [..24].ToLowerInvariant()
+                ? "output-" + DriverIds.Hash(target.DevicePath.ToUpperInvariant())
                 : "output-" + output.Id.ToString("x8");
             var section = "nvidia." + instance;
             var before = controls.Count;
@@ -162,7 +174,7 @@ internal sealed class NvSession : IDriverSession
         });
         Try(instance + "/color", () =>
         {
-            var current = _api.Color(output.Id, 1);
+            var current = _api.ReadColor(output.Id);
             foreach (var field in NvColorField.All)
             {
                 var choices = field.Values.Where(value => _api.SupportsColor(output.Id,
@@ -244,7 +256,7 @@ internal sealed class NvSession : IDriverSession
 
 /// <summary>One DWORD setting of the global DRS profile, shared by the choice and G-SYNC controls.</summary>
 /// <remarks>Reads and writes use the state the pass loaded (<see cref="NvSession.BeginPass" />).</remarks>
-/// <param name="api">Borrowed DRS session/profile API, used only on the plugin's serialized native lane.</param>
+/// <param name="api">Borrowed DRS session/profile API, used only on the driver's serialized native lane.</param>
 /// <param name="id">Driver DWORD setting identity within the global profile.</param>
 internal sealed class NvDrsSetting(INvProfiles api, uint id)
 {

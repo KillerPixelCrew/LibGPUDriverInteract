@@ -78,27 +78,23 @@ internal sealed class NvColorControl(
 
     internal override void ProbeSupport(GpuValue current, WriteAdmission admission)
     {
-        api.RequireOutput(output);
         var data = api.Color(output.Id, 1);
-        api.RequireOutput(output);
         api.SetColor(output.Id, data, admission);
     }
 
     internal override GpuValue Read()
     {
-        return GpuValue.Choice(NvSettingControl.Encode(field.Read(api.Color(output.Id, 1))));
+        return GpuValue.Choice(NvSettingControl.Encode(field.Read(api.ReadColor(output.Id))));
     }
 
     internal override void Write(GpuValue value, WriteAdmission admission)
     {
-        api.RequireOutput(output);
         var data = field.WithValue(api.Color(output.Id, 1), NvSettingControl.Decode(value));
         if (!api.SupportsColor(output.Id, data))
         {
             throw new DriverFailure("This color combination is no longer supported on the current NVIDIA link.");
         }
 
-        api.RequireOutput(output);
         api.SetColor(output.Id, data, admission);
     }
 }
@@ -119,7 +115,6 @@ internal sealed class NvDitherControl(
 
     internal override void ProbeSupport(GpuValue current, WriteAdmission admission)
     {
-        api.RequireOutput(output);
         api.SetDither(output, api.Dither(output.Id), admission, true);
     }
 
@@ -132,7 +127,6 @@ internal sealed class NvDitherControl(
 
     internal override void Write(GpuValue value, WriteAdmission admission)
     {
-        api.RequireOutput(output);
         var data = api.Dither(output.Id);
         var requested = NvSettingControl.Decode(value);
         if (field != 0 && data.State != 1)
@@ -166,10 +160,8 @@ internal sealed class NvOutputModeControl(
 {
     internal override void ProbeSupport(GpuValue current, WriteAdmission admission)
     {
-        var output = api.RequireOutput(expected);
-        var mode = api.OutputMode(output.Id);
-        api.RequireOutput(expected);
-        api.SetOutputMode(output.Id, mode, admission);
+        var mode = api.OutputMode(expected.Id);
+        api.SetOutputMode(expected.Id, mode, admission);
     }
 
     internal override GpuValue Read()
@@ -179,7 +171,7 @@ internal sealed class NvOutputModeControl(
 
     internal override void Write(GpuValue value, WriteAdmission admission)
     {
-        var output = api.RequireOutput(expected);
+        var output = expected;
         var requested = NvSettingControl.Decode(value);
         var capabilities = api.HdrCapabilities(output.Id);
         if (requested == 2 && (capabilities & 0x80) == 0)
@@ -204,7 +196,6 @@ internal sealed class NvOutputModeControl(
             }
         }
 
-        api.RequireOutput(expected);
         api.SetOutputMode(output.Id, requested, admission);
         if (resetTarget is not null)
         {

@@ -1,4 +1,4 @@
-using System.Reflection;
+using System.Collections.Concurrent;
 using LibGPUDriverInteract.Runtime;
 using LibGPUDriverInteract.Testing;
 using Xunit;
@@ -8,428 +8,321 @@ namespace LibGPUDriverInteract.Tests.Api;
 public sealed class GpuDriverTests
 {
     [Fact]
-    public async Task CycleNotificationPrecedesDescriptorsAndResumeRejectsOldCommands()
+    public async Task StartPublishesDescriptorsBeforeStateAndStableCommandsWorkAfterExplicitRestart()
     {
         using var directory = new TemporaryDirectory();
-        var engine = new Engine();
-        await using var driver = new GpuDriver(engine, directory.Root);
-        var events = new List<string>();
-        driver.CycleStarted += cycle => events.Add("cycle:" + cycle);
-        driver.DescriptorsChanged += set => events.Add("descriptors:" + set.CycleGeneration);
-
+        var fixture = new Fixture();
+        await using var driver = fixture.Create(directory.Root);
+        var events = new ConcurrentQueue<string>();
+        driver.DescriptorsChanged += _ => events.Enqueue("descriptors");
+        driver.StateChanged += _ => events.Enqueue("state");
         Assert.Equal(GpuHealth.Ready, await driver.StartAsync());
-        var oldCommand = Command(driver);
-        Assert.Equal(new[] { "cycle:1", "descriptors:1" }, events.Take(2));
-        Assert.Equal(GpuCommandOutcome.AppliedVerified, (await driver.ExecuteAsync(oldCommand)).Outcome);
-        await driver.SuspendAsync();
-        await driver.ResumeAsync();
-
-        Assert.Equal(2, driver.CycleGeneration);
-        Assert.Equal(new[] { "cycle:2", "descriptors:2" }, events.TakeLast(2));
-        var rejected = await driver.ExecuteAsync(oldCommand);
-        Assert.Equal(GpuCommandOutcome.Rejected, rejected.Outcome);
-        Assert.Equal(GpuReasonCode.GenerationChanged, rejected.Reason!.Code);
-        Assert.Equal(1, engine.Commands);
+        Assert.Equal(new[] { "descriptors", "state" }, events.Take(2));
+        Assert.Equal(GpuCommandOutcome.AppliedVerified, (await driver.ExecuteAsync(Command())).Outcome);
+        Assert.Equal(GpuHealth.Ready, await driver.StartAsync());
+        Assert.Equal(1, fixture.Opens);
         Assert.True(await driver.StopAsync());
+        Assert.Equal(GpuReasonCode.Quiescing, (await driver.ExecuteAsync(Command())).Reason!.Code);
+        Assert.Equal(GpuHealth.Ready, await driver.StartAsync());
+        Assert.Equal(GpuCommandOutcome.AppliedVerified, (await driver.ExecuteAsync(Command())).Outcome);
+        Assert.Equal(2, fixture.Opens);
     }
 
     [Fact]
-    public async Task AdmissionClosesBeforeEngineRetirementAndBlocksNewWrites()
+    public async Task DescriptorCollectionsAreDetachedFromPublisherInputsAndConsumerMutation()
     {
         using var directory = new TemporaryDirectory();
-        var engine = new Engine();
-        await using var driver = new GpuDriver(engine, directory.Root);
-        await driver.StartAsync();
-        var command = Command(driver);
-        var closed = false;
-        driver.AdmissionClosed += _ => closed = true;
-        engine.BeforeStop = () => Assert.True(closed);
-
-        Assert.True(await driver.StopAsync());
-        var rejected = await driver.ExecuteAsync(command);
-        Assert.Equal(GpuReasonCode.Quiescing, rejected.Reason!.Code);
-        Assert.Equal(0, engine.Commands);
-        await driver.StartAsync();
-        Assert.Equal(2, driver.CycleGeneration);
-        Assert.True(await driver.StopAsync());
-    }
-
-    [Fact]
-    public async Task CollectionsAreDetachedFromPublisherInputsAndConsumerMutation()
-    {
-        using var directory = new TemporaryDirectory();
-        var engine = new Engine();
-        await using var driver = new GpuDriver(engine, directory.Root);
-        await driver.StartAsync();
         var choices = new List<GpuChoice> { new("on", "On") };
-        var categories = new List<GpuCategory>
-        {
-            new() { CategoryId = "graphics", Title = "Graphics" }
-        };
-        var descriptors = new List<GpuDescriptor>
-        {
-            DriverDescriptors.Toggle("enabled", "gpu", "Enabled", "adapter", GpuProfileScope.GlobalOnly) with
-            {
-                Choices = choices
-            }
-        };
+        var categories = new List<GpuCategory> { new() { CategoryId = "graphics", Title = "Graphics" } };
         var sections = new List<GpuSection>
-        {
-            new() { SectionId = "adapter", Title = "Adapter", Categories = categories }
-        };
-        await engine.Sink!.PublishDescriptorsAsync(new GpuDescriptorSet
-        {
-            Generation = 2, CycleGeneration = driver.CycleGeneration,
-            Sections = sections, Descriptors = descriptors
-        }, CancellationToken.None);
-
+            { new() { SectionId = "graphics", Title = "Graphics", Categories = categories } };
+        var control = new DescriptorControl(
+            DriverDescriptors.Toggle("enabled", "driver", "Enabled", "graphics", GpuProfileScope.GlobalOnly)
+                with
+                {
+                    Choices = choices
+                });
+        var session = new DriverTestSession(control) { Model = new DriverModel(sections, [control]) };
+        await using var driver = new GpuDriver(new DriverRuntime("fixture", (_, _) => session), directory.Root);
+        GpuDescriptorSet? published = null;
+        driver.DescriptorsChanged += set => published = set;
+        await driver.StartAsync();
         choices.Clear();
         categories.Clear();
-        descriptors.Clear();
         sections.Clear();
-        var first = driver.DescriptorSet;
-        var second = driver.DescriptorSet;
-        Assert.Single(first.Sections);
-        Assert.Single(first.Sections[0].Categories);
-        Assert.Single(first.Descriptors[0].Choices);
-        Assert.NotSame(first.Descriptors, second.Descriptors);
-        Assert.Throws<NotSupportedException>(() => ((IList<GpuDescriptor>)first.Descriptors).Clear());
-        Assert.Throws<NotSupportedException>(() => ((IList<GpuChoice>)first.Descriptors[0].Choices).Clear());
-        Assert.True(await driver.StopAsync());
+        Assert.Single(published!.Sections);
+        Assert.Single(published.Sections[0].Categories);
+        Assert.Single(published.Descriptors[0].Choices);
+        Assert.Throws<NotSupportedException>(() => ((IList<GpuDescriptor>)published.Descriptors).Clear());
+        Assert.Throws<NotSupportedException>(() => ((IList<GpuChoice>)published.Descriptors[0].Choices).Clear());
     }
 
     [Fact]
-    public async Task StaleStatesAreDiscardedAndSubscriberFailureDoesNotChangeAcceptedWrite()
+    public async Task SubscriberFailureDoesNotChangeAcceptedWriteOrOtherSubscribers()
     {
         using var directory = new TemporaryDirectory();
-        var logs = new List<GpuLogEntry>();
-        var engine = new Engine();
-        await using var driver = new GpuDriver(engine, directory.Root, logs.Add);
-        driver.DescriptorsChanged += _ => throw new InvalidOperationException("consumer event failure");
+        var fixture = new Fixture();
+        var logs = new ConcurrentQueue<GpuLogEntry>();
+        await using var driver = fixture.Create(directory.Root, logs.Enqueue);
+        var states = new ConcurrentQueue<GpuState>();
+        driver.DescriptorsChanged += _ => throw new InvalidOperationException("descriptor consumer failed");
+        driver.StateChanged += _ => throw new InvalidOperationException("state consumer failed");
+        driver.StateChanged += states.Enqueue;
         Assert.Equal(GpuHealth.Ready, await driver.StartAsync());
-        Assert.Single(driver.DescriptorSet.Descriptors);
-
-        await engine.Sink!.PublishCapabilityStateAsync(State(driver, 0), CancellationToken.None);
-        Assert.Empty(driver.States);
-        await engine.Sink.PublishCapabilityStateAsync(State(driver, 1), CancellationToken.None);
-        Assert.Single(driver.States);
-        Assert.Equal(GpuCommandOutcome.AppliedVerified, (await driver.ExecuteAsync(Command(driver))).Outcome);
-        Assert.Contains(logs, entry => entry.Message == "consumer event failure");
-        Assert.True(await driver.StopAsync());
+        Assert.Equal(GpuCommandOutcome.AppliedVerified, (await driver.ExecuteAsync(Command())).Outcome);
+        Assert.True(states.Last().ObservedValue!.BooleanValue);
+        Assert.Contains(logs, entry => entry.Message == "descriptor consumer failed");
+        Assert.Contains(logs, entry => entry.Message == "state consumer failed");
     }
 
     [Fact]
-    public async Task CancelledStopRetainsOwnedCallAndResumeWaitsForRetirement()
+    public async Task CancelledStartupWaitKeepsTheSharedNativeWorkOwnedAndDoesNotOpenTwice()
     {
         using var directory = new TemporaryDirectory();
-        var engine = new Engine
+        using var release = new ManualResetEventSlim();
+        using var cancellation = new CancellationTokenSource();
+        var entered = Signal();
+        var fixture = new Fixture
         {
-            RetirementRelease = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously)
+            BeforeDiscover = () =>
+            {
+                entered.TrySetResult();
+                release.Wait();
+            }
         };
-        await using var driver = new GpuDriver(engine, directory.Root);
-        await driver.StartAsync();
-        Assert.False(await driver.StopAsync(new CancellationToken(true)));
-        await engine.RetirementEntered.Task.WaitAsync(TimeSpan.FromSeconds(5));
-        Assert.False(engine.Retired);
-        var resume = driver.ResumeAsync().AsTask();
-        Assert.False(resume.IsCompleted);
-        Assert.Equal(1, driver.CycleGeneration);
-        engine.RetirementRelease.SetResult();
-        await resume.WaitAsync(TimeSpan.FromSeconds(5));
-        Assert.True(engine.Retired);
-        Assert.Equal(2, driver.CycleGeneration);
-        Assert.True(await driver.StopAsync());
+        await using var driver = fixture.Create(directory.Root);
+        var first = driver.StartAsync(cancellation.Token).AsTask();
+        try
+        {
+            await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            cancellation.Cancel();
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => first);
+            Assert.Equal(0, fixture.Disposals);
+            var second = driver.StartAsync().AsTask();
+            Assert.False(second.IsCompleted);
+            Assert.Equal(1, fixture.Opens);
+            release.Set();
+            Assert.Equal(GpuHealth.Ready, await second.WaitAsync(TimeSpan.FromSeconds(5)));
+            Assert.Equal(1, fixture.Opens);
+        }
+        finally
+        {
+            release.Set();
+        }
     }
 
-    [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public async Task CancelledStartupReleasesCallerAndKeepsRetirementAndRestartBehindNativeWork(bool resume)
+    [Fact]
+    public async Task StopClosesAdmissionAndRestartWaitsForNativeRetirementAfterTheCallerCancels()
+    {
+        using var directory = new TemporaryDirectory();
+        using var release = new ManualResetEventSlim();
+        var entered = Signal();
+        var fixture = new Fixture();
+        await using var driver = fixture.Create(directory.Root);
+        await driver.StartAsync();
+        fixture.Last!.BeforeDispose = () =>
+        {
+            entered.TrySetResult();
+            release.Wait();
+        };
+        Task<GpuHealth>? restart = null;
+        try
+        {
+            Assert.False(await driver.StopAsync(new CancellationToken(true)));
+            await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.Equal(GpuReasonCode.Quiescing, (await driver.ExecuteAsync(Command())).Reason!.Code);
+            restart = driver.StartAsync().AsTask();
+            Assert.False(restart.IsCompleted);
+            Assert.Equal(1, fixture.Opens);
+        }
+        finally
+        {
+            release.Set();
+        }
+
+        Assert.Equal(GpuHealth.Ready, await restart!.WaitAsync(TimeSpan.FromSeconds(5)));
+        Assert.Equal(2, fixture.Opens);
+        Assert.Equal(1, fixture.Disposals);
+    }
+
+    [Fact]
+    public async Task QueuedCancelledCommandNeverDispatchesAnotherSetter()
+    {
+        using var directory = new TemporaryDirectory();
+        using var release = new ManualResetEventSlim();
+        using var cancellation = new CancellationTokenSource();
+        var entered = Signal();
+        var fixture = new Fixture();
+        await using var driver = fixture.Create(directory.Root);
+        await driver.StartAsync();
+        fixture.Control.BeforeWrite = () =>
+        {
+            entered.TrySetResult();
+            release.Wait();
+        };
+        var first = driver.ExecuteAsync(Command()).AsTask();
+        try
+        {
+            await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            var queued = driver.ExecuteAsync(Command(), cancellation.Token).AsTask();
+            cancellation.Cancel();
+            Assert.Equal(GpuCommandOutcome.Rejected, (await queued.WaitAsync(TimeSpan.FromSeconds(5))).Outcome);
+            Assert.Equal(1, fixture.Control.Writes);
+        }
+        finally
+        {
+            release.Set();
+        }
+
+        Assert.Equal(GpuCommandOutcome.AppliedVerified, (await first.WaitAsync(TimeSpan.FromSeconds(5))).Outcome);
+        Assert.Equal(2, fixture.Control.Writes);
+    }
+
+    [Fact]
+    public async Task CancellationAfterDispatchedWriteStillPublishesTheWrittenValue()
     {
         using var directory = new TemporaryDirectory();
         using var cancellation = new CancellationTokenSource();
-        var engine = new Engine();
-        await using var driver = new GpuDriver(engine, directory.Root);
-        if (resume)
-        {
-            await driver.StartAsync();
-            await driver.SuspendAsync();
-        }
-
-        engine.StartupRelease = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        engine.StartupEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        engine.RetirementEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        engine.IgnoreStartupCancellation = true;
-        engine.BeforeStop = () => Assert.False(engine.StartInFlight);
-        var admissionClosed = false;
-        driver.AdmissionClosed += _ => admissionClosed = true;
-        var startup = resume
-            ? driver.ResumeAsync(cancellation.Token).AsTask()
-            : driver.StartAsync(cancellation.Token).AsTask();
-        try
-        {
-            await engine.StartupEntered.Task.WaitAsync(TimeSpan.FromSeconds(5));
-            cancellation.Cancel();
-            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => startup.WaitAsync(TimeSpan.FromSeconds(2)));
-            Assert.True(admissionClosed);
-            Assert.True(engine.StartInFlight);
-            Assert.False(engine.RetirementEntered.Task.IsCompleted);
-            Assert.Equal(GpuReasonCode.Quiescing, (await driver.ExecuteAsync(Command(driver))).Reason!.Code);
-
-            var starts = engine.Starts;
-            var cycle = driver.CycleGeneration;
-            var restart = driver.StartAsync().AsTask();
-            Assert.False(restart.IsCompleted);
-            Assert.Equal(starts, engine.Starts);
-            Assert.Equal(cycle, driver.CycleGeneration);
-
-            engine.StartupRelease.SetResult();
-            Assert.Equal(GpuHealth.Ready, await restart.WaitAsync(TimeSpan.FromSeconds(5)));
-            Assert.True(engine.RetirementEntered.Task.IsCompleted);
-            Assert.Equal(starts + 1, engine.Starts);
-            Assert.Equal(cycle + 1, driver.CycleGeneration);
-            Assert.True(await driver.StopAsync());
-        }
-        finally
-        {
-            engine.StartupRelease.TrySetResult();
-        }
+        var fixture = new Fixture();
+        await using var driver = fixture.Create(directory.Root);
+        var states = new ConcurrentQueue<GpuState>();
+        driver.StateChanged += states.Enqueue;
+        await driver.StartAsync();
+        fixture.Control.IgnoreWrites = true;
+        fixture.Control.AfterWrite = cancellation.Cancel;
+        var result = await driver.ExecuteAsync(Command(), cancellation.Token);
+        Assert.Equal(GpuCommandOutcome.AppliedUnverified, result.Outcome);
+        Assert.True(states.Last().ObservedValue!.BooleanValue);
+        Assert.Equal(GpuStateQuality.Observed, states.Last().Quality);
     }
 
     [Fact]
-    public async Task DisposeJoinsFinishedNativeRetirementAndDisposesEngineExactlyOnce()
+    public async Task DisposeWaitsForFinalPublicationAndNativeRetirementExactlyOnce()
     {
         using var directory = new TemporaryDirectory();
-        using var releasePublication = new ManualResetEventSlim();
-        var finalPublication = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        var engine = new Engine();
-        await using var driver = new GpuDriver(engine, directory.Root);
+        using var release = new ManualResetEventSlim();
+        var entered = Signal();
+        var fixture = new Fixture();
+        var driver = fixture.Create(directory.Root);
         await driver.StartAsync();
         driver.StatusChanged += status =>
         {
-            if (status.Detail != "The driver is stopped.")
+            if (status.Detail == "The driver is stopped.")
             {
-                return;
+                entered.TrySetResult();
+                release.Wait();
             }
-
-            finalPublication.TrySetResult();
-            releasePublication.Wait();
-        };
-        engine.BeforeDispose = () =>
-        {
-            // Observe the retained task boundary: native stop has finished but the facade may still publish/release.
-            var retirement =
-                (Task)typeof(GpuDriver).GetField("_retirement", BindingFlags.Instance | BindingFlags.NonPublic)!
-                    .GetValue(driver)!;
-            Assert.True(retirement.IsCompleted);
-            Assert.False(engine.StartInFlight);
         };
         var stop = driver.StopAsync().AsTask();
+        Task? disposal = null;
         try
         {
-            await finalPublication.Task.WaitAsync(TimeSpan.FromSeconds(5));
-            Assert.True(engine.Retired);
-            Assert.False(stop.IsCompleted);
-            await driver.DisposeAsync();
-            await driver.DisposeAsync();
-            Assert.Equal(0, engine.Disposals);
+            await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            disposal = driver.DisposeAsync().AsTask();
+            Assert.False(disposal.IsCompleted);
+            Assert.Equal(1, fixture.Disposals);
         }
         finally
         {
-            releasePublication.Set();
+            release.Set();
         }
 
         Assert.True(await stop.WaitAsync(TimeSpan.FromSeconds(5)));
-        await engine.Disposed.Task.WaitAsync(TimeSpan.FromSeconds(5));
-        Assert.Equal(1, engine.Disposals);
+        await disposal!.WaitAsync(TimeSpan.FromSeconds(5));
         await driver.DisposeAsync();
-        Assert.Equal(1, engine.Disposals);
+        Assert.Equal(1, fixture.Disposals);
+        await Assert.ThrowsAsync<ObjectDisposedException>(() => driver.StartAsync().AsTask());
     }
 
-    [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public async Task StopInvalidatesQueuedStartupBeforeItsCycleAndLaterExplicitStartStillOpens(bool resume)
+    [Fact]
+    public async Task StopDuringBlockedSessionLoadingPreventsNativeInitializationWritesAndKeepsTheCallOwned()
     {
         using var directory = new TemporaryDirectory();
-        var engine = new Engine();
-        var scheduled = new Queue<(Func<Task<GpuHealth>> Work, TaskCompletionSource<GpuHealth> Completion)>();
-        await using var driver = new GpuDriver(engine, directory.Root, scheduleStartup: work =>
+        using var release = new ManualResetEventSlim();
+        var entered = Signal();
+        var loading = false;
+        var cleanupWrites = 0;
+        var session = new DriverTestSession
         {
-            var completion = new TaskCompletionSource<GpuHealth>(TaskCreationOptions.RunContinuationsAsynchronously);
-            scheduled.Enqueue((work, completion));
-            return completion.Task;
+            BeforeInitialize = (admission, _) =>
+            {
+                admission.Check();
+                cleanupWrites++;
+            },
+            BeforeDispose = () => Assert.False(loading)
+        };
+        var runtime = new DriverRuntime("fixture", (_, _) =>
+        {
+            loading = true;
+            entered.TrySetResult();
+            release.Wait();
+            loading = false;
+            return session;
         });
-        if (resume)
+        await using var driver = new GpuDriver(runtime, directory.Root);
+        var startup = driver.StartAsync().AsTask();
+        try
         {
-            var first = driver.StartAsync().AsTask();
-            await RunNextStartupAsync();
-            await first;
-            await driver.SuspendAsync();
+            await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.False(await driver.StopAsync(new CancellationToken(true)));
+            Assert.True(loading);
+            Assert.Equal(0, session.Disposals);
+            Assert.Equal(0, cleanupWrites);
+        }
+        finally
+        {
+            release.Set();
         }
 
-        var starts = engine.Starts;
-        var cycle = driver.CycleGeneration;
-        var queued = resume ? driver.ResumeAsync().AsTask() : driver.StartAsync().AsTask();
-        Assert.Single(scheduled);
+        Assert.Equal(GpuHealth.Unavailable, await startup.WaitAsync(TimeSpan.FromSeconds(5)));
         Assert.True(await driver.StopAsync());
-        Assert.Equal(starts, engine.Starts);
-        Assert.Equal(cycle, driver.CycleGeneration);
-
-        // Run the accepted startup only after stop has already confirmed retirement.
-        await RunNextStartupAsync();
-        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => queued);
-        Assert.Equal(starts, engine.Starts);
-        Assert.Equal(cycle, driver.CycleGeneration);
-        Assert.Equal(GpuHealth.Unavailable, driver.Status.Health);
-
-        var restart = driver.StartAsync().AsTask();
-        await RunNextStartupAsync();
-        Assert.Equal(GpuHealth.Ready, await restart);
-        Assert.Equal(starts + 1, engine.Starts);
-        Assert.Equal(cycle + 1, driver.CycleGeneration);
-        Assert.True(await driver.StopAsync());
-
-        async Task RunNextStartupAsync()
-        {
-            var (work, completion) = scheduled.Dequeue();
-            try
-            {
-                completion.SetResult(await work());
-            }
-            catch (OperationCanceledException cancellation)
-            {
-                completion.SetCanceled(cancellation.CancellationToken);
-            }
-            catch (Exception error)
-            {
-                completion.SetException(error);
-            }
-        }
+        Assert.Equal(0, session.Initializations);
+        Assert.Equal(0, cleanupWrites);
+        Assert.Equal(1, session.Disposals);
     }
 
-    private static GpuCommand Command(GpuDriver driver)
+    private static TaskCompletionSource Signal()
+    {
+        return new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+    }
+
+    private static GpuCommand Command()
     {
         return new GpuCommand
-        {
-            CommandId = Guid.NewGuid(), CapabilityId = "enabled", InstanceId = "gpu",
-            ExpectedCycleGeneration = driver.CycleGeneration,
-            ExpectedDescriptorGeneration = driver.DescriptorSet.Generation,
-            RequestedValue = GpuValue.Boolean(true), Deadline = DriverDeadline.Never
-        };
+            { CapabilityId = "enabled", InstanceId = "driver", RequestedValue = GpuValue.Boolean(true) };
     }
 
-    private static GpuState State(GpuDriver driver, long generation)
+    private sealed class Fixture
     {
-        return new GpuState
+        internal DriverTestControl Control { get; } = new();
+        internal List<DriverTestSession> Sessions { get; } = [];
+        internal DriverTestSession? Last => Sessions.LastOrDefault();
+        internal int Opens => Sessions.Count;
+        internal int Disposals => Sessions.Sum(session => session.Disposals);
+        internal Action? BeforeDiscover { get; init; }
+
+        internal GpuDriver Create(string directory, Action<GpuLogEntry>? diagnostics = null)
         {
-            CapabilityId = "enabled", InstanceId = "gpu", CycleGeneration = driver.CycleGeneration,
-            DescriptorGeneration = generation, Available = true, ObservedValue = GpuValue.Boolean(false),
-            Quality = GpuStateQuality.Observed
-        };
+            return new GpuDriver(
+                new DriverRuntime("fixture", (_, sink) =>
+                {
+                    var session = new DriverTestSession(Control) { Sink = sink, BeforeDiscover = BeforeDiscover };
+                    Sessions.Add(session);
+                    return session;
+                }), directory, diagnostics);
+        }
     }
 
-    private sealed class Engine : IDriverEngine
+    private sealed class DescriptorControl(GpuDescriptor descriptor) : DriverControl(descriptor)
     {
-        internal IDriverSink? Sink { get; private set; }
-        internal int Commands { get; private set; }
-        internal int Starts { get; private set; }
-        internal bool StartInFlight { get; private set; }
-        internal bool IgnoreStartupCancellation { get; set; }
-        internal TaskCompletionSource? StartupRelease { get; set; }
-
-        internal TaskCompletionSource StartupEntered { get; set; } =
-            new(TaskCreationOptions.RunContinuationsAsynchronously);
-
-        internal Action? BeforeStop { get; set; }
-        internal Action? BeforeDispose { get; set; }
-        internal bool Retired { get; private set; }
-        internal int Disposals { get; private set; }
-
-        internal TaskCompletionSource Disposed { get; } =
-            new(TaskCreationOptions.RunContinuationsAsynchronously);
-
-        internal TaskCompletionSource? RetirementRelease { get; init; }
-
-        internal TaskCompletionSource RetirementEntered { get; set; } =
-            new(TaskCreationOptions.RunContinuationsAsynchronously);
-
-        public async ValueTask<GpuHealth> StartAsync(IDriverSink sink, DriverContext context,
-            CancellationToken cancellationToken)
+        internal override GpuValue Read()
         {
-            Starts++;
-            StartInFlight = true;
-            StartupEntered.TrySetResult();
-            try
-            {
-                if (StartupRelease is not null)
-                {
-                    // A dispatched native call may ignore cancellation until it returns.
-                    await StartupRelease.Task;
-                }
-
-                Sink = sink;
-                await sink.PublishDescriptorsAsync(new GpuDescriptorSet
-                {
-                    Generation = 1, CycleGeneration = sink.CycleGeneration,
-                    Descriptors =
-                        [DriverDescriptors.Toggle("enabled", "gpu", "Enabled", "adapter", GpuProfileScope.GlobalOnly)]
-                }, IgnoreStartupCancellation ? CancellationToken.None : cancellationToken);
-                sink.ReportHealth(GpuHealth.Ready, "Fixture controls available.");
-                return GpuHealth.Ready;
-            }
-            finally
-            {
-                StartInFlight = false;
-            }
+            return GpuValue.Boolean(false);
         }
 
-        public ValueTask SessionChangedAsync(DriverContext context, CancellationToken cancellationToken)
+        internal override void Write(GpuValue value, WriteAdmission admission)
         {
-            return ValueTask.CompletedTask;
-        }
-
-        public async ValueTask SuspendAsync(DriverContext context, CancellationToken cancellationToken)
-        {
-            await StopAsync(context, cancellationToken);
-        }
-
-        public async ValueTask ResumeAsync(DriverContext context, CancellationToken cancellationToken)
-        {
-            await StartAsync(Sink!, context, cancellationToken);
-        }
-
-        public async ValueTask<bool> StopAsync(DriverContext context, CancellationToken cancellationToken)
-        {
-            BeforeStop?.Invoke();
-            RetirementEntered.TrySetResult();
-            if (RetirementRelease is not null)
-            {
-                await RetirementRelease.Task.WaitAsync(cancellationToken);
-            }
-
-            Retired = true;
-            return true;
-        }
-
-        public ValueTask<GpuCommandResult> ExecuteCommandAsync(GpuCommand command, CancellationToken cancellationToken)
-        {
-            Commands++;
-            return ValueTask.FromResult(CommandResults.Verified(command, command.RequestedValue!));
-        }
-
-        public ValueTask<GpuProfileSyncResult> SyncApplicationProfilesAsync(GpuProfileSync sync,
-            CancellationToken cancellationToken)
-        {
-            return ValueTask.FromResult(new GpuProfileSyncResult(0, 0, []));
-        }
-
-        public ValueTask DisposeAsync()
-        {
-            BeforeDispose?.Invoke();
-            Disposals++;
-            Disposed.TrySetResult();
-            return ValueTask.CompletedTask;
+            admission.Check();
         }
     }
 }

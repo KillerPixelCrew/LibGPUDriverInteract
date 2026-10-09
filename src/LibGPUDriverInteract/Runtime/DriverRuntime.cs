@@ -1,558 +1,348 @@
 // SPDX-License-Identifier: MIT
 
-using System.Security.Cryptography;
-using System.Text.Json;
-
 namespace LibGPUDriverInteract.Runtime;
 
-/// <summary>Driver-discovered presentation and controls owned by one live native session.</summary>
-/// <param name="Sections">Capability groups to publish through the host.</param>
-/// <param name="Controls">Native control adapters; use only while their session remains alive.</param>
 internal sealed record DriverModel(IReadOnlyList<GpuSection> Sections, IReadOnlyList<DriverControl> Controls);
 
-/// <summary>A native driver session accessed exclusively through DriverRuntime's serialized lane.</summary>
+/// <summary>A native session accessed only while GpuDriver owns its single lane.</summary>
 internal interface IDriverSession : IDisposable
 {
-    /// <summary>Starts one observation pass or command; the session may load driver state once for it.</summary>
+    void Initialize(WriteAdmission admission, CancellationToken token)
+    {
+    }
+
     void BeginPass();
-
-    /// <summary>Discovers the control model for the open driver session.</summary>
-    /// <returns>Sections and adapters whose native resources remain owned by this session.</returns>
     DriverModel Discover();
-
-    /// <summary>Applies one host-owned application profile synchronization request.</summary>
-    /// <param name="sync">Desired profile policy and ownership records.</param>
-    /// <param name="admission">Checked immediately before each native setter.</param>
-    /// <param name="token">Cancels preparatory work; a dispatched write must not be retried.</param>
-    /// <returns>Accepted, rejected or uncertain profile work and retained recovery state.</returns>
     GpuProfileSyncResult Sync(GpuProfileSync sync, WriteAdmission admission, CancellationToken token);
 }
 
-/// <summary>Classifies a native driver failure for command result and session recovery decisions.</summary>
-/// <param name="message">Diagnostic detail safe for the host log.</param>
-/// <param name="attempted">Whether a write may already have reached the driver.</param>
-/// <param name="lost">Whether the native session is no longer usable.</param>
 internal sealed class DriverFailure(string message, bool attempted = false, bool lost = false) : Exception(message)
 {
-    /// <summary>Whether at least one setter may have reached the driver; false does not classify session health.</summary>
     internal bool Attempted { get; } = attempted;
-
-    /// <summary>Whether the session is unusable and must retire before reopening.</summary>
     internal bool Lost { get; } = lost;
 }
 
-/// <summary>One driver's capability adapter; policy, serialization and publication remain in DriverRuntime.</summary>
-/// <param name="descriptor">Stable capability identity, range and presentation metadata.</param>
 internal abstract class DriverControl(GpuDescriptor descriptor)
 {
-    /// <summary>Stable descriptor used for command validation and host publication.</summary>
     internal GpuDescriptor Descriptor { get; } = descriptor;
-
-    /// <summary>Capability and instance identifiers joined for the session's internal lookup.</summary>
-    internal string Key => Descriptor.CapabilityId + "/" + Descriptor.InstanceId;
-
-    /// <summary>Support-probe cache key; adapters may share a probe result across related controls.</summary>
+    internal string Key { get; } = DriverIds.Key(descriptor.CapabilityId, descriptor.InstanceId);
     internal virtual string SupportKey => Key;
-
-    /// <summary>Reads the control from its live native session on the runtime's serialized lane.</summary>
-    /// <returns>The observed typed value; failures throw rather than fabricate a known value.</returns>
     internal abstract GpuValue Read();
-
-    /// <summary>Attempts one native setter after checking the supplied write admission.</summary>
-    /// <param name="value">Descriptor-compatible requested value.</param>
-    /// <param name="admission">DriverDeadline/cancellation gate checked immediately before native mutation.</param>
-    /// <remarks>Returning does not independently confirm hardware state; the runtime performs readback separately.</remarks>
     internal abstract void Write(GpuValue value, WriteAdmission admission);
 
-    /// <summary>Probes setter support by writing the current value through the native setter.</summary>
-    /// <param name="current">Value just read from this control.</param>
-    /// <param name="admission">Gate checked before the probe write; this operation is not read-only.</param>
     internal virtual void ProbeSupport(GpuValue current, WriteAdmission admission)
     {
         Write(current, admission);
     }
 
-    /// <summary>Checks the supported Boolean, choice, or integer command shape against this control's descriptor.</summary>
-    /// <param name="value">Requested value, or null for a descriptor declaring an action.</param>
-    /// <returns>Whether this adapter accepts the shape, range, and step; hardware admission is checked later.</returns>
-    internal bool Accepts(GpuValue? value)
+    internal virtual bool Accepts(GpuValue? value)
     {
-        if (Descriptor.SupportsAction)
-        {
-            return value is null;
-        }
-
-        if (value is null || value.Kind != Descriptor.ValueKind || !Descriptor.SupportsWrite)
-        {
-            return false;
-        }
-
-        return value.Kind switch
-        {
-            GpuValueKind.Boolean => value.BooleanValue is not null,
-            GpuValueKind.Choice => Descriptor.Choices.Any(choice => choice.Value == value.ChoiceValue),
-            GpuValueKind.Integer => value.IntegerValue is { } number && number >= Descriptor.Minimum
-                                                                     && number <= Descriptor.Maximum &&
-                                                                     (number - Descriptor.Minimum) %
-                                                                     (Descriptor.Step ?? 1) == 0,
-            GpuValueKind.None => true,
-            _ => false
-        };
+        return DriverDescriptors.Accepts(Descriptor, value);
     }
 }
 
-/// <summary>Serialized resident driver ownership shared by AMD and NVIDIA.</summary>
-/// <param name="id">Stable diagnostic driver scope.</param>
-/// <param name="open">Opens a session over the host state directory and change logger.</param>
-internal sealed class DriverRuntime(string id, Func<string, Action<string, string>, IDriverSession> open)
-    : IDriverEngine
+/// <summary>Discovery, observations and sticky written state shared by all three driver sessions.</summary>
+/// <remarks>GpuDriver owns serialization and lifetime. This class has no separate gate, loop or retirement task.</remarks>
+internal sealed class DriverRuntime(string id, Func<string, IDriverSink, IDriverSession> open)
 {
-    private readonly SemaphoreSlim _lane = new(1, 1);
-    private readonly Dictionary<string, (GpuValue? Value, DateTimeOffset At)> _published = [];
-    private readonly Lock _stopGate = new();
-
-    /// <summary>Probe outcomes by support key: null when the round trip succeeded, else why it failed.</summary>
+    private readonly Dictionary<string, GpuState> _published = [];
     private readonly Dictionary<string, string?> _supportResults = [];
-
-    private IDriverSink? _capabilities;
-    private DriverContext? _context;
-    private long _cycle;
-    private bool _disposed;
-    private string? _fingerprint;
-    private long _generation;
-    private IDriverSink? _host;
-    private Task? _loop;
+    private readonly Dictionary<string, WrittenValue> _written = [];
+    private Func<bool> _active = () => false;
+    private GpuDescriptorSet _descriptors = new();
     private DriverModel _model = new([], []);
-    private CancellationTokenSource? _observation;
-    private Task? _retiring;
-    private volatile bool _running;
     private IDriverSession? _session;
+    private IDriverSink? _sink;
+    private string _stateDirectory = "";
 
-    /// <inheritdoc />
-    internal string Id => id;
-
-    /// <inheritdoc />
-    public async ValueTask<GpuCommandResult> ExecuteCommandAsync(GpuCommand command,
-        CancellationToken cancellationToken)
+    internal GpuHealth Start(IDriverSink sink, string stateDirectory, Func<bool> active, CancellationToken token)
     {
+        _sink = sink;
+        _stateDirectory = stateDirectory;
+        _active = active;
+        _published.Clear();
+        _written.Clear();
+        _descriptors = new GpuDescriptorSet();
+        Open(token);
+        return _session is null || _model.Controls.Count == 0 ? GpuHealth.Unavailable : GpuHealth.Ready;
+    }
+
+    internal void RefreshTopology(CancellationToken token)
+    {
+        if (_session is null)
+        {
+            Open(token);
+            return;
+        }
+
+        var probeStarted = false;
         try
         {
-            await _lane.WaitAsync(cancellationToken).ConfigureAwait(false);
-        }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-        {
-            return CommandResults.Rejected(command, GpuReasonCode.Quiescing,
-                "The command was cancelled before its driver write.", true);
-        }
-
-        try
-        {
-            if (!_running || _session is not { } session)
-            {
-                return CommandResults.Rejected(command, GpuReasonCode.DriverUnavailable,
-                    "The GPU driver is not open.");
-            }
-
-            if (command.ExpectedCycleGeneration != _cycle || command.ExpectedDescriptorGeneration != _generation)
-            {
-                return CommandResults.Rejected(command, GpuReasonCode.GenerationChanged,
-                    "The command was authored against an earlier descriptor set.", true);
-            }
-
-            if (command.Deadline.HasExpired)
-            {
-                return CommandResults.Rejected(command, GpuReasonCode.Quiescing,
-                    "Command deadline passed before it could be applied.", true);
-            }
-
-            var control = _model.Controls.FirstOrDefault(item => item.Descriptor.CapabilityId == command.CapabilityId
-                                                                 && item.Descriptor.InstanceId == command.InstanceId);
-            if (control is null)
-            {
-                return CommandResults.Rejected(command, GpuReasonCode.Unsupported,
-                    $"{command.CapabilityId} is not published for {command.InstanceId}.");
-            }
-
-            if (!control.Accepts(command.RequestedValue))
-            {
-                return CommandResults.Rejected(command, GpuReasonCode.ValueOutOfRange,
-                    "The value is not offered by this GPU control.");
-            }
-
-            var requested = command.RequestedValue ?? GpuValue.None();
-            var admission = new WriteAdmission(cancellationToken, command.Deadline,
-                () => _running && _session is not null);
-            try
-            {
-                // Admission may originate on the UI dispatcher. All native work stays off it.
-                await Task.Run(() =>
-                {
-                    session.BeginPass();
-                    control.Write(requested, admission);
-                }, CancellationToken.None).ConfigureAwait(false);
-            }
-            catch (DriverFailure failure)
-            {
-                if (failure.Lost)
-                {
-                    await LoseAsync(failure.Message).ConfigureAwait(false);
-                }
-
-                if (failure.Attempted)
-                {
-                    return CommandResults.Indeterminate(command, GpuReasonCode.TransportFaulted,
-                        failure.Message);
-                }
-
-                if (!admission.Admitted)
-                {
-                    return CommandResults.Rejected(command, GpuReasonCode.Quiescing, failure.Message, true);
-                }
-
-                return CommandResults.Rejected(command,
-                    failure.Lost ? GpuReasonCode.DriverUnavailable : GpuReasonCode.Unsupported,
-                    failure.Message);
-            }
-            catch (Exception error) when (error is not OutOfMemoryException)
-            {
-                return CommandResults.Indeterminate(command, GpuReasonCode.TransportFaulted, error.Message);
-            }
-
-            GpuValue? readback = null;
-            if (control.Descriptor.SupportsRead)
-            {
-                try
-                {
-                    readback = await Task.Run(control.Read, CancellationToken.None).ConfigureAwait(false);
-                }
-                catch (DriverFailure failure) when (failure.Lost)
-                {
-                    await LoseAsync(failure.Message).ConfigureAwait(false);
-                    return CommandResults.Unverified(command,
-                        "The driver accepted the write and disappeared before readback: " + failure.Message);
-                }
-                catch (Exception error) when (error is not OutOfMemoryException)
-                {
-                    Trace(GpuLogLevel.Warn, error.Message);
-                }
-            }
-
-            // The written value is what is published, verified or not.
-            var verified = readback is not null && readback == requested;
-            await PublishValueAsync(control, requested, CancellationToken.None,
-                    quality: verified ? GpuStateQuality.Verified : GpuStateQuality.Observed)
-                .ConfigureAwait(false);
-            return verified
-                ? CommandResults.Verified(command, readback!)
-                : CommandResults.Unverified(command);
-        }
-        finally
-        {
-            await ReleaseLaneAsync().ConfigureAwait(false);
-        }
-    }
-
-    /// <inheritdoc />
-    public async ValueTask<GpuProfileSyncResult> SyncApplicationProfilesAsync(GpuProfileSync sync,
-        CancellationToken cancellationToken)
-    {
-        await _lane.WaitAsync(cancellationToken).ConfigureAwait(false);
-        try
-        {
-            if (!_running || _session is not { } session || sync.CycleGeneration != _cycle)
-            {
-                return new GpuProfileSyncResult(0, 0, []);
-            }
-
-            var admission = new WriteAdmission(cancellationToken, DriverDeadline.Never,
-                () => _running && _session is not null);
-            try
-            {
-                return await Task.Run(() => session.Sync(sync, admission, cancellationToken), CancellationToken.None)
-                    .ConfigureAwait(false);
-            }
-            catch (DriverFailure failure) when (failure.Lost)
-            {
-                await LoseAsync(failure.Message).ConfigureAwait(false);
-                return new GpuProfileSyncResult(0, 0,
-                    [new GpuProfileFailure("driver", "", "", failure.Message)]);
-            }
-        }
-        finally
-        {
-            await ReleaseLaneAsync().ConfigureAwait(false);
-        }
-    }
-
-    /// <inheritdoc />
-    public async ValueTask<GpuHealth> StartAsync(IDriverSink host, DriverContext context,
-        CancellationToken cancellationToken)
-    {
-        ObjectDisposedException.ThrowIf(_disposed, this);
-        if (Volatile.Read(ref _retiring) is { } retiring)
-        {
-            await retiring.WaitAsync(cancellationToken).ConfigureAwait(false);
-        }
-
-        await _lane.WaitAsync(cancellationToken).ConfigureAwait(false);
-        try
-        {
-            ObjectDisposedException.ThrowIf(_disposed, this);
-            if (_running)
-            {
-                return _session is null || _model.Controls.Count == 0 ? GpuHealth.Unavailable : GpuHealth.Ready;
-            }
-
-            _host = host;
-            _context = context;
-            _capabilities = host;
-            _cycle = _capabilities.CycleGeneration;
-            _fingerprint = null;
-            _running = true;
-            await Task.Run(() => ObserveAsync(cancellationToken, context.Deadline), cancellationToken)
-                .ConfigureAwait(false);
-            if (_running)
-            {
-                _observation = new CancellationTokenSource();
-                _loop = ObserveLoopAsync(_observation.Token);
-            }
-
-            return _session is null || _model.Controls.Count == 0 || !_running
-                ? GpuHealth.Unavailable
-                : GpuHealth.Ready;
-        }
-        catch
-        {
-            _running = false;
-            throw;
-        }
-        finally
-        {
-            await ReleaseLaneAsync().ConfigureAwait(false);
-        }
-    }
-
-    /// <inheritdoc />
-    public ValueTask SessionChangedAsync(DriverContext context, CancellationToken cancellationToken)
-    {
-        cancellationToken.ThrowIfCancellationRequested();
-        _context = context;
-        return ValueTask.CompletedTask;
-    }
-
-    /// <inheritdoc />
-    public async ValueTask SuspendAsync(DriverContext context, CancellationToken cancellationToken)
-    {
-        await StopAsync(context, cancellationToken).ConfigureAwait(false);
-    }
-
-    /// <inheritdoc />
-    public async ValueTask ResumeAsync(DriverContext context, CancellationToken cancellationToken)
-    {
-        await StartAsync(_host!, context, cancellationToken).ConfigureAwait(false);
-    }
-
-    /// <summary>Stops within the caller's budget.</summary>
-    /// <remarks>
-    ///     When the token ends first, stop reports itself unconfirmed: the retiring task keeps the native lane
-    ///     and the DLL until the running driver call returns, then closes them.
-    /// </remarks>
-    /// <param name="context">Lifecycle context supplied by the host; retirement does not use it.</param>
-    /// <param name="cancellationToken">Bounds the caller's wait; does not cancel an in-flight native call.</param>
-    /// <returns>True when retirement completed; false when the wait was cancelled and cleanup continues.</returns>
-    public async ValueTask<bool> StopAsync(DriverContext context, CancellationToken cancellationToken)
-    {
-        _running = false;
-        var retiring = BeginRetirement();
-        try
-        {
-            await retiring.WaitAsync(cancellationToken).ConfigureAwait(false);
-            return true;
-        }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-        {
-            Trace(GpuLogLevel.Warn, "The driver is still finishing an owned call; cleanup remains queued.");
-            return false;
-        }
-    }
-
-    /// <summary>Closes runtime admission and schedules native retirement without waiting for it.</summary>
-    /// <returns>An already completed value task; use the stop result to determine whether release was confirmed.</returns>
-    /// <remarks>Outstanding driver calls retain the session and DLL until the retirement task can close them.</remarks>
-    public ValueTask DisposeAsync()
-    {
-        if (_disposed)
-        {
-            return ValueTask.CompletedTask;
-        }
-
-        _disposed = true;
-        _running = false;
-        _ = BeginRetirement();
-        return ValueTask.CompletedTask;
-    }
-
-    /// <summary>Starts retirement once, or returns the one already running.</summary>
-    private Task BeginRetirement()
-    {
-        lock (_stopGate)
-        {
-            if (_retiring is null || _retiring.IsCompleted)
-            {
-                var observation = _observation;
-                var loop = _loop;
-                observation?.Cancel();
-                _retiring = Task.Run(() => RetireAsync(observation, loop), CancellationToken.None);
-            }
-
-            return _retiring;
-        }
-    }
-
-    private async Task RetireAsync(CancellationTokenSource? observation, Task? loop)
-    {
-        if (loop is not null)
-        {
-            try
-            {
-                await loop.ConfigureAwait(false);
-            }
-            catch (Exception error)
-            {
-                Trace(GpuLogLevel.Warn, "Driver observation stopped: " + error.Message);
-            }
-        }
-
-        await _lane.WaitAsync(CancellationToken.None).ConfigureAwait(false);
-        try
-        {
-            await Task.Run(Close, CancellationToken.None).ConfigureAwait(false);
-            if (_capabilities is not null)
-            {
-                try
-                {
-                    await PublishModelAsync(new DriverModel([], []), CancellationToken.None).ConfigureAwait(false);
-                }
-                catch (Exception error)
-                {
-                    Trace(GpuLogLevel.Warn, "Driver channel retired: " + error.Message);
-                }
-            }
-        }
-        finally
-        {
-            _lane.Release();
-        }
-
-        _ = Interlocked.CompareExchange(ref _loop, null, loop);
-        Interlocked.CompareExchange(ref _observation, null, observation);
-        observation?.Dispose();
-    }
-
-    private async Task ObserveLoopAsync(CancellationToken token)
-    {
-        using var timer = new PeriodicTimer(TimeSpan.FromSeconds(10));
-        try
-        {
-            while (await timer.WaitForNextTickAsync(token).ConfigureAwait(false))
-            {
-                await _lane.WaitAsync(token).ConfigureAwait(false);
-                try
-                {
-                    if (_running)
-                    {
-                        // The loop is bounded by its own token, which stop cancels.
-                        await Task.Run(() => ObserveAsync(token, DriverDeadline.Never), CancellationToken.None)
-                            .ConfigureAwait(false);
-                    }
-                }
-                finally
-                {
-                    await ReleaseLaneAsync().ConfigureAwait(false);
-                }
-            }
-        }
-        catch (OperationCanceledException) when (token.IsCancellationRequested)
-        {
-        }
-    }
-
-    /// <summary>One observation pass, bounded by the token and deadline of the call that runs it.</summary>
-    private async Task ObserveAsync(CancellationToken token, DriverDeadline deadline)
-    {
-        try
-        {
-            _session ??= open(_context!.StateDirectory, (key, detail) =>
-                _host!.LogChange(GpuLogLevel.Warn, id, key, detail));
             _session.BeginPass();
-            await PublishModelAsync(CheckSupport(_session.Discover(), token, deadline), token).ConfigureAwait(false);
-            foreach (var control in _model.Controls)
+            // Discover replaces native controls. Keep their new handles even if the caller cancels a probe.
+            _model = _session.Discover();
+            try
             {
-                try
-                {
-                    await PublishValueAsync(control, control.Read(), token).ConfigureAwait(false);
-                }
-                catch (Exception error) when (error is not OperationCanceledException &&
-                                              error is not DriverFailure { Lost: true })
-                {
-                    _host!.LogChange(GpuLogLevel.Warn, id, control.Key, error.Message);
-                    await PublishValueAsync(control, null, token, error.Message).ConfigureAwait(false);
-                }
+                PublishModel(CheckSupport(_model, token, () => probeStarted = true), CancellationToken.None);
+            }
+            catch (OperationCanceledException) when (token.IsCancellationRequested)
+            {
+                PublishModel(_model, CancellationToken.None);
+                throw;
             }
 
-            Health(_model.Controls.Count == 0 ? GpuHealth.Unavailable : GpuHealth.Ready,
+            probeStarted = false;
+            Observe(token);
+            if (_session is null)
+            {
+                ReopenAfterReadLoss(token);
+                return;
+            }
+
+            _sink!.ReportHealth(_model.Controls.Count == 0 ? GpuHealth.Unavailable : GpuHealth.Ready,
                 _model.Controls.Count == 0
                     ? "The driver reported no supported GPU controls."
                     : "Driver controls available.");
         }
-        catch (Exception error) when (error is not OperationCanceledException)
+        catch (DriverFailure failure) when (failure.Lost)
         {
-            Close();
-            await PublishModelAsync(new DriverModel([], []), token).ConfigureAwait(false);
-            Health(GpuHealth.Unavailable, error.Message);
+            Lose(failure.Message);
+            // A support probe may have mutated state before its final read failed. Never retry that pass.
+            if (!probeStarted && !failure.Attempted)
+            {
+                ReopenAfterReadLoss(token);
+            }
         }
     }
 
-    /// <summary>Publishes a model. A refused set keeps the session open and goes out again next pass.</summary>
-    private async Task PublishModelAsync(DriverModel model, CancellationToken token)
+    private void ReopenAfterReadLoss(CancellationToken token)
     {
-        var fingerprint = Convert.ToHexString(SHA256.HashData(JsonSerializer.SerializeToUtf8Bytes(new
+        if (_active() && !token.IsCancellationRequested)
         {
-            model.Sections, Descriptors = model.Controls.Select(control => control.Descriptor).ToArray()
-        })));
-        _model = model;
-        if (fingerprint == _fingerprint)
+            Open(token);
+        }
+    }
+
+    internal void Observe(CancellationToken token)
+    {
+        if (_session is null)
         {
             return;
         }
 
         try
         {
-            await _capabilities!.PublishDescriptorsAsync(new GpuDescriptorSet
+            _session.BeginPass();
+            foreach (var control in _model.Controls)
             {
-                CycleGeneration = _cycle, Generation = ++_generation, Sections = model.Sections,
-                Descriptors = model.Controls.Select(control => control.Descriptor).ToArray()
-            }, token).ConfigureAwait(false);
-            _fingerprint = fingerprint;
-            _published.Clear();
+                token.ThrowIfCancellationRequested();
+                GpuValue? value = null;
+                string? error = null;
+                try
+                {
+                    value = control.Read();
+                }
+                catch (Exception failure) when (failure is not OperationCanceledException and not OutOfMemoryException
+                                                    and not DriverFailure { Lost: true })
+                {
+                    error = failure.Message;
+                    _sink!.LogChange(GpuLogLevel.Warn, id, "read/" + control.Key, error);
+                }
+
+                var quality = value is null ? GpuStateQuality.Unknown : GpuStateQuality.Observed;
+                if (_written.TryGetValue(control.Key, out var written))
+                {
+                    if (value is null || value == written.Readback || value == written.Value ||
+                        written.Readback is null)
+                    {
+                        if (value is not null && (value == written.Value || written.Readback is null))
+                        {
+                            _written[control.Key] = written with { Readback = value };
+                        }
+
+                        quality = control.Descriptor.SupportsRead && value == written.Value
+                            ? GpuStateQuality.Verified
+                            : GpuStateQuality.Observed;
+                        value = written.Value;
+                    }
+                    else
+                    {
+                        _written.Remove(control.Key);
+                    }
+                }
+
+                PublishValue(control, value, error, quality, token);
+            }
         }
-        catch (Exception error) when (error is not OperationCanceledException and not OutOfMemoryException)
+        catch (DriverFailure failure) when (failure.Lost)
         {
-            _host!.LogChange(GpuLogLevel.Warn, id, "descriptors",
-                "The consumer refused the descriptor set: " + error.Message);
+            Lose(failure.Message);
         }
     }
 
-    /// <summary>
-    ///     Reads every writable control and probes each support key once. Only probe outcomes are kept: a failed
-    ///     read skips the control for this pass, and a probe refused before its native write runs again later.
-    /// </summary>
-    private DriverModel CheckSupport(DriverModel discovered, CancellationToken token, DriverDeadline deadline)
+    internal GpuCommandResult Execute(GpuCommand command, CancellationToken token)
+    {
+        if (_session is null)
+        {
+            Open(token);
+        }
+
+        if (_session is not { } session)
+        {
+            return CommandResults.Rejected(command, GpuReasonCode.DriverUnavailable, "The GPU driver is not open.");
+        }
+
+        var control = _model.Controls.FirstOrDefault(item => item.Descriptor.CapabilityId == command.CapabilityId
+                                                             && item.Descriptor.InstanceId == command.InstanceId);
+        if (control is null)
+        {
+            return CommandResults.Rejected(command, GpuReasonCode.Unsupported,
+                $"{command.CapabilityId} is not published for {command.InstanceId}.");
+        }
+
+        if (!control.Accepts(command.RequestedValue))
+        {
+            return CommandResults.Rejected(command, GpuReasonCode.ValueOutOfRange,
+                "The value is not offered by this GPU control.");
+        }
+
+        var requested = command.RequestedValue ?? GpuValue.None();
+        var admission = new WriteAdmission(token, _active);
+        try
+        {
+            session.BeginPass();
+            admission.Check();
+            control.Write(requested, admission);
+        }
+        catch (DriverFailure failure)
+        {
+            if (failure.Lost)
+            {
+                Lose(failure.Message);
+            }
+
+            return failure.Attempted
+                ? CommandResults.Indeterminate(command, GpuReasonCode.TransportFaulted, failure.Message)
+                : CommandResults.Rejected(command, !admission.Admitted ? GpuReasonCode.Quiescing
+                    : failure.Lost ? GpuReasonCode.DriverUnavailable : GpuReasonCode.Unsupported, failure.Message);
+        }
+        catch (OperationCanceledException) when (token.IsCancellationRequested)
+        {
+            return CommandResults.Rejected(command, GpuReasonCode.Quiescing,
+                "The command was cancelled before dispatch.", true);
+        }
+        catch (Exception failure) when (failure is not OutOfMemoryException)
+        {
+            return CommandResults.Indeterminate(command, GpuReasonCode.TransportFaulted, failure.Message);
+        }
+
+        GpuValue? readback = null;
+        string? detail = null;
+        if (control.Descriptor.SupportsRead)
+        {
+            try
+            {
+                session.BeginPass();
+                readback = control.Read();
+            }
+            catch (Exception failure) when (failure is not OutOfMemoryException)
+            {
+                detail = failure.Message;
+                if (failure is DriverFailure { Lost: true })
+                {
+                    Lose(detail);
+                }
+                else
+                {
+                    _sink!.LogChange(GpuLogLevel.Warn, id, "readback/" + control.Key, detail);
+                }
+            }
+        }
+
+        var verified = readback == requested;
+        if (_session is not null)
+        {
+            _written[control.Key] = new WrittenValue(requested, readback);
+            PublishValue(control, requested, detail,
+                verified ? GpuStateQuality.Verified : GpuStateQuality.Observed, CancellationToken.None);
+        }
+
+        return verified ? CommandResults.Verified(command, readback!) : CommandResults.Unverified(command, detail);
+    }
+
+    internal GpuProfileSyncResult Sync(GpuProfileSync sync, CancellationToken token)
+    {
+        if (_session is null)
+        {
+            if (sync.Profiles.Count == 0)
+            {
+                return SyncUnavailable(sync, "The GPU driver session is not open.");
+            }
+
+            Open(token);
+        }
+
+        if (_session is not { } session)
+        {
+            return SyncUnavailable(sync, "The GPU driver session is not open.");
+        }
+
+        try
+        {
+            session.BeginPass();
+            return session.Sync(sync, new WriteAdmission(token, _active), token);
+        }
+        catch (DriverFailure failure) when (failure.Lost)
+        {
+            Lose(failure.Message);
+            return SyncUnavailable(sync, failure.Message);
+        }
+    }
+
+    internal static GpuProfileSyncResult SyncUnavailable(GpuProfileSync sync, string detail)
+    {
+        var failures = sync.Profiles.SelectMany(profile => profile.Executables.SelectMany(executable =>
+            profile.Values.Select(value => new GpuProfileFailure(profile.ProfileId, executable,
+                value.CapabilityId, detail)))).ToArray();
+        return new GpuProfileSyncResult(0, 0, failures.Length == 0
+            ? [new GpuProfileFailure("driver", "", "", detail)]
+            : failures);
+    }
+
+    private void Open(CancellationToken token)
+    {
+        token.ThrowIfCancellationRequested();
+        try
+        {
+            _session = open(_stateDirectory, _sink!);
+            token.ThrowIfCancellationRequested();
+            if (!_active())
+            {
+                Close();
+                return;
+            }
+
+            _session.Initialize(new WriteAdmission(token, _active), token);
+            token.ThrowIfCancellationRequested();
+            _session.BeginPass();
+            PublishModel(CheckSupport(_session.Discover(), token), token);
+            Observe(token);
+            _sink!.ReportHealth(_model.Controls.Count == 0 ? GpuHealth.Unavailable : GpuHealth.Ready,
+                _model.Controls.Count == 0
+                    ? "The driver reported no supported GPU controls."
+                    : "Driver controls available.");
+        }
+        catch (Exception failure) when (failure is not OperationCanceledException and not OutOfMemoryException)
+        {
+            Lose(failure.Message);
+        }
+    }
+
+    private DriverModel CheckSupport(DriverModel discovered, CancellationToken token, Action? beforeProbe = null)
     {
         var values = new Dictionary<string, GpuValue>();
-        // Read the whole model before any setter is exercised. Actions and status rows are never written.
         foreach (var control in discovered.Controls.Where(control => control.Descriptor.SupportsWrite
-                                                                     && !control.Descriptor.SupportsAction))
+                                                                     && control.Descriptor.Role != GpuRole.Action))
         {
             token.ThrowIfCancellationRequested();
             if (_supportResults.ContainsKey(control.SupportKey))
@@ -564,22 +354,18 @@ internal sealed class DriverRuntime(string id, Func<string, Action<string, strin
             {
                 values[control.Key] = control.Read();
             }
-            catch (Exception error) when (error is not OperationCanceledException and not OutOfMemoryException)
+            catch (Exception failure) when (failure is not OperationCanceledException and not OutOfMemoryException
+                                                and not DriverFailure { Lost: true })
             {
-                if (error is DriverFailure { Lost: true })
-                {
-                    throw;
-                }
-
-                _host!.LogChange(GpuLogLevel.Info, id, "support/" + control.SupportKey,
-                    "Support read failed; control skipped this pass: " + error.Message);
+                // Missing readback is not evidence that the setter is unsupported. Keep the control usable.
+                _sink!.LogChange(GpuLogLevel.Info, id, "support/" + control.SupportKey,
+                    "Support read unavailable; control remains available: " + failure.Message);
             }
         }
 
-        var admission = new WriteAdmission(token, deadline, () => _running && _session is not null);
+        var admission = new WriteAdmission(token, _active);
         foreach (var control in discovered.Controls.Where(control => values.ContainsKey(control.Key)))
         {
-            token.ThrowIfCancellationRequested();
             if (_supportResults.ContainsKey(control.SupportKey))
             {
                 continue;
@@ -587,28 +373,25 @@ internal sealed class DriverRuntime(string id, Func<string, Action<string, strin
 
             try
             {
+                beforeProbe?.Invoke();
                 control.ProbeSupport(values[control.Key], admission);
                 _supportResults[control.SupportKey] = null;
             }
-            catch (Exception error) when (error is not OutOfMemoryException)
+            catch (DriverFailure failure) when (!failure.Attempted && !admission.Admitted)
             {
-                if (error is OperationCanceledException
-                    || (error is DriverFailure { Attempted: false } && !admission.Admitted))
-                {
-                    // Nothing was written, so nothing is recorded: the next discovery probes it again.
-                    token.ThrowIfCancellationRequested();
-                    throw;
-                }
-
-                // A failed or uncertain native write is never retried by the observation loop or a reconnect.
-                _supportResults[control.SupportKey] = error.Message;
-                if (error is DriverFailure { Lost: true })
+                throw new OperationCanceledException(failure.Message, failure, token);
+            }
+            catch (Exception failure) when (failure is not OperationCanceledException and not OutOfMemoryException)
+            {
+                // A dispatched failed or uncertain support write is never automatically repeated.
+                _supportResults[control.SupportKey] = failure.Message;
+                if (failure is DriverFailure { Lost: true })
                 {
                     throw;
                 }
             }
 
-            _host!.LogChange(GpuLogLevel.Info, id, "support/" + control.SupportKey,
+            _sink!.LogChange(GpuLogLevel.Info, id, "support/" + control.SupportKey,
                 _supportResults[control.SupportKey] is { } detail
                     ? "Support round trip failed; control omitted: " + detail
                     : "Support round trip succeeded; current native state retained.");
@@ -616,64 +399,87 @@ internal sealed class DriverRuntime(string id, Func<string, Action<string, strin
 
         return discovered with
         {
-            Controls = discovered.Controls.Where(control => !control.Descriptor.SupportsWrite
-                                                            || control.Descriptor.SupportsAction
-                                                            || (_supportResults.TryGetValue(control.SupportKey,
-                                                                out var result) && result is null)).ToArray()
+            Controls = discovered.Controls.Where(control => !_supportResults.TryGetValue(control.SupportKey,
+                out var failure) || failure is null).ToArray()
         };
     }
 
-    /// <summary>Publishes one state. A refused state is traced and published again on the next pass.</summary>
-    private async Task PublishValueAsync(DriverControl control, GpuValue? value, CancellationToken token,
-        string? error = null, GpuStateQuality? quality = null)
+    private void PublishModel(DriverModel model, CancellationToken token)
     {
-        var now = DateTimeOffset.UtcNow;
-        if (_published.TryGetValue(control.Key, out var previous) && previous.Value == value
-                                                                  && now - previous.At < TimeSpan.FromSeconds(20))
+        // Discovery may replace native handles after cancellation. Keep those handles, with the same
+        // failed-setter filtering used by a completed support pass, in every publication path.
+        model = model with
+        {
+            Controls = model.Controls.Where(control => !_supportResults.TryGetValue(control.SupportKey,
+                out var failure) || failure is null).ToArray()
+        };
+        _model = model;
+        var descriptors = new GpuDescriptorSet
+        {
+            Sections = model.Sections, Descriptors = model.Controls.Select(control => control.Descriptor).ToArray()
+        };
+        if (SameModel(_descriptors, descriptors))
         {
             return;
         }
 
-        try
+        _sink!.PublishDescriptorsAsync(descriptors, token).GetAwaiter().GetResult();
+        _descriptors = descriptors;
+        _published.Clear();
+        var keys = model.Controls.Select(control => control.Key).ToHashSet();
+        foreach (var key in _written.Keys.Where(key => !keys.Contains(key)).ToArray())
         {
-            await _capabilities!.PublishCapabilityStateAsync(new GpuState
-            {
-                CapabilityId = control.Descriptor.CapabilityId, InstanceId = control.Descriptor.InstanceId,
-                CycleGeneration = _cycle, DescriptorGeneration = _generation, ObservedValue = value,
-                Available = value is not null || control.Descriptor.SupportsWrite || control.Descriptor.SupportsAction,
-                ObservedAt = now,
-                Reason = error is null ? null : new GpuReason(GpuReasonCode.TransportFaulted, error),
-                Quality = quality ?? (value is null ? GpuStateQuality.Unknown : GpuStateQuality.Observed)
-            }, token).ConfigureAwait(false);
-            _published[control.Key] = (value, now);
-        }
-        catch (Exception refusal) when (refusal is not OperationCanceledException and not OutOfMemoryException)
-        {
-            _published.Remove(control.Key);
-            _host!.LogChange(GpuLogLevel.Warn, id, "publish/" + control.Key,
-                "The consumer refused the state: " + refusal.Message);
+            _written.Remove(key);
         }
     }
 
-    /// <summary>Closes a lost session and retracts its controls.</summary>
-    private async Task LoseAsync(string detail)
+    private static bool SameModel(GpuDescriptorSet left, GpuDescriptorSet right)
     {
-        await Task.Run(Close, CancellationToken.None).ConfigureAwait(false);
-        await PublishModelAsync(new DriverModel([], []), CancellationToken.None).ConfigureAwait(false);
-        Health(GpuHealth.Unavailable, detail);
+        return left.Sections.Count == right.Sections.Count && left.Descriptors.Count == right.Descriptors.Count
+                                                           && left.Sections.Zip(right.Sections).All(pair =>
+                                                               pair.First with { Categories = null! } ==
+                                                               pair.Second with { Categories = null! }
+                                                               && pair.First.Categories.SequenceEqual(pair.Second
+                                                                   .Categories))
+                                                           && left.Descriptors.Zip(right.Descriptors).All(pair =>
+                                                               pair.First with { Choices = null! } == pair.Second with
+                                                               {
+                                                                   Choices = null!
+                                                               }
+                                                               && pair.First.Choices
+                                                                   .SequenceEqual(pair.Second.Choices));
     }
 
-    private async ValueTask ReleaseLaneAsync()
+    private void PublishValue(DriverControl control, GpuValue? value, string? error,
+        GpuStateQuality quality, CancellationToken token)
     {
-        if (!_running)
+        var state = new GpuState
         {
-            await Task.Run(Close, CancellationToken.None).ConfigureAwait(false);
+            CapabilityId = control.Descriptor.CapabilityId, InstanceId = control.Descriptor.InstanceId,
+            ObservedValue = value,
+            Available = value is not null || control.Descriptor.SupportsWrite ||
+                        control.Descriptor.Role == GpuRole.Action,
+            Reason = error is null ? null : new GpuReason(GpuReasonCode.TransportFaulted, error), Quality = quality
+        };
+        if (_published.GetValueOrDefault(control.Key) == state)
+        {
+            return;
         }
 
-        _lane.Release();
+        state = state with { ObservedAt = DateTimeOffset.UtcNow };
+        _sink!.PublishCapabilityStateAsync(state, token).GetAwaiter().GetResult();
+        _published[control.Key] = state with { ObservedAt = null };
     }
 
-    private void Close()
+    private void Lose(string detail)
+    {
+        Close();
+        PublishModel(new DriverModel([], []), CancellationToken.None);
+        _sink!.ReportHealth(GpuHealth.Unavailable, detail);
+        _sink.LogChange(GpuLogLevel.Warn, id, "health", detail);
+    }
+
+    internal void Close()
     {
         var session = _session;
         _session = null;
@@ -681,23 +487,15 @@ internal sealed class DriverRuntime(string id, Func<string, Action<string, strin
         {
             session?.Dispose();
         }
-        catch (Exception error)
+        catch (Exception failure) when (failure is not OutOfMemoryException)
         {
-            Trace(GpuLogLevel.Warn, "Driver cleanup: " + error.Message);
+            _sink?.Log(GpuLogLevel.Warn, id, "Driver cleanup: " + failure.Message);
         }
+
+        _model = new DriverModel([], []);
+        _published.Clear();
+        _written.Clear();
     }
 
-    private void Trace(GpuLogLevel level, string message)
-    {
-        _host?.Log(level, id, message);
-    }
-
-    private void Health(GpuHealth health, string detail)
-    {
-        if (_context is { } context)
-        {
-            _host!.ReportHealth(health, detail);
-            _host!.LogChange(GpuLogLevel.Info, id, "health", detail);
-        }
-    }
+    private sealed record WrittenValue(GpuValue Value, GpuValue? Readback);
 }

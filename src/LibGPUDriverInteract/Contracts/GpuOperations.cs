@@ -58,12 +58,6 @@ public sealed record GpuState
     /// <summary>Adapter or display discriminator.</summary>
     public string? InstanceId { get; init; }
 
-    /// <summary>Lifecycle cycle owning this state.</summary>
-    public required long CycleGeneration { get; init; }
-
-    /// <summary>Descriptor revision owning this state.</summary>
-    public required long DescriptorGeneration { get; init; }
-
     /// <summary>Last read or accepted value, or null when unknown.</summary>
     public GpuValue? ObservedValue { get; init; }
 
@@ -80,18 +74,9 @@ public sealed record GpuState
     public required GpuStateQuality Quality { get; init; }
 }
 
-/// <summary>A request validated against both live generations immediately before dispatch.</summary>
+/// <summary>A typed request validated against the owner's current controls before dispatch.</summary>
 public sealed record GpuCommand
 {
-    /// <summary>Correlation identity.</summary>
-    public required Guid CommandId { get; init; }
-
-    /// <summary>Lifecycle cycle used to author this request.</summary>
-    public required long ExpectedCycleGeneration { get; init; }
-
-    /// <summary>Descriptor revision used to author this request.</summary>
-    public required long ExpectedDescriptorGeneration { get; init; }
-
     /// <summary>Setting identity.</summary>
     public required string CapabilityId { get; init; }
 
@@ -100,17 +85,11 @@ public sealed record GpuCommand
 
     /// <summary>Requested typed value, or null for an action.</summary>
     public GpuValue? RequestedValue { get; init; }
-
-    /// <summary>Active-time deadline; it cannot terminate a dispatched native call.</summary>
-    public required DriverDeadline Deadline { get; init; }
 }
 
 /// <summary>A command outcome; no rollback or automatic retry is implied.</summary>
 public sealed record GpuCommandResult
 {
-    /// <summary>The command answered.</summary>
-    public required Guid CommandId { get; init; }
-
     /// <summary>Truthful native-write outcome.</summary>
     public required GpuCommandOutcome Outcome { get; init; }
 
@@ -130,8 +109,7 @@ public sealed record GpuReason(GpuReasonCode Code, string Detail, bool Retryable
 /// <summary>Detached driver availability.</summary>
 /// <param name="Health">Current health.</param>
 /// <param name="Detail">Plain diagnostic detail.</param>
-/// <param name="CycleGeneration">Lifecycle cycle owning this status.</param>
-public sealed record GpuStatus(GpuHealth Health, string Detail, long CycleGeneration);
+public sealed record GpuStatus(GpuHealth Health, string Detail);
 
 /// <summary>One diagnostic transition delivered to the consumer.</summary>
 /// <param name="Level">Severity.</param>
@@ -142,9 +120,8 @@ public sealed record GpuLogEntry(GpuLogLevel Level, string Scope, string Message
 
 /// <summary>A complete desired set of native executable profiles.</summary>
 /// <param name="Revision">Increasing consumer revision.</param>
-/// <param name="CycleGeneration">Lifecycle cycle used to resolve values.</param>
 /// <param name="Profiles">Complete desired native application profile set.</param>
-public sealed record GpuProfileSync(long Revision, long CycleGeneration, IReadOnlyList<GpuApplicationProfile> Profiles);
+public sealed record GpuProfileSync(long Revision, IReadOnlyList<GpuApplicationProfile> Profiles);
 
 /// <summary>One application's native overrides.</summary>
 /// <param name="ProfileId">Consumer-owned stable identity.</param>

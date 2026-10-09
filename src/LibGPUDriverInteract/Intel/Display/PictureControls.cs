@@ -1,5 +1,6 @@
 using LibGPUDriverInteract.Intel.Controls;
 using LibGPUDriverInteract.Intel.Igcl;
+using LibGPUDriverInteract.Runtime;
 
 namespace LibGPUDriverInteract.Intel.Display;
 
@@ -68,7 +69,7 @@ internal static unsafe class ScalingControls
         [
             new FieldControl<CtlScalingSettings>(
                 source,
-                Descriptors.Choice("display.scaling", instance, "Scaling", offered, placement),
+                DriverDescriptors.Choice("display.scaling", instance, "Scaling", offered, placement),
                 static (control, settings) =>
                     ControlRead.Of(control.MemberOf(settings.Enable == 0 ? Identity : settings.ScalingType)),
                 static (control, current, _, value) =>
@@ -89,7 +90,7 @@ internal static unsafe class ScalingControls
         var range = IntegerRange.Linear(CustomMinimum, CustomMaximum);
         controls.Add(new FieldControl<CtlScalingSettings>(
             source,
-            Descriptors.Range("display.scaling-width", instance, "Custom scaling width", range,
+            DriverDescriptors.Range("display.scaling-width", instance, "Custom scaling width", range,
                 GpuUnit.Percent, placement.Plus(1)),
             static (control, settings) => CustomAxis(control, settings, settings.CustomScalingX),
             static (_, current, _, value) =>
@@ -102,7 +103,7 @@ internal static unsafe class ScalingControls
             true));
         controls.Add(new FieldControl<CtlScalingSettings>(
             source,
-            Descriptors.Range("display.scaling-height", instance, "Custom scaling height", range,
+            DriverDescriptors.Range("display.scaling-height", instance, "Custom scaling height", range,
                 GpuUnit.Percent, placement.Plus(2)),
             static (control, settings) => CustomAxis(control, settings, settings.CustomScalingY),
             static (_, current, _, value) =>
@@ -196,7 +197,7 @@ internal static unsafe class SharpnessControls
         [
             new FieldControl<CtlSharpnessSettings>(
                 source,
-                Descriptors.Toggle("display.sharpening", instance, "Display sharpening", placement),
+                DriverDescriptors.Toggle("display.sharpening", instance, "Display sharpening", placement),
                 static (_, settings) => ControlRead.Of(IntelControl.Boolean(settings.Enable != 0)),
                 (_, current, known, value) =>
                 {
@@ -212,7 +213,7 @@ internal static unsafe class SharpnessControls
         {
             controls.Add(new FieldControl<CtlSharpnessSettings>(
                 source,
-                Descriptors.Choice("display.sharpening-filter", instance, "Sharpening filter", offered,
+                DriverDescriptors.Choice("display.sharpening-filter", instance, "Sharpening filter", offered,
                     placement.Plus(1)),
                 static (control, settings) =>
                     ControlRead.Of(control.MemberOf((settings.FilterType & Adaptive) != 0 ? Adaptive : NonAdaptive)),
@@ -249,7 +250,7 @@ internal static unsafe class SharpnessControls
         {
             controls.Add(new FieldControl<CtlSharpnessSettings>(
                 source,
-                Descriptors.Range("display.sharpening-intensity", instance, "Sharpening intensity", range,
+                DriverDescriptors.Range("display.sharpening-intensity", instance, "Sharpening intensity", range,
                     GpuUnit.None, placement.Plus(2)),
                 static (control, settings) =>
                     ControlRead.Of(GpuValue.Integer(control.Range!.Value.ToInteger(settings.Intensity))),
@@ -363,7 +364,7 @@ internal static unsafe class WireFormatControl
 
         return new FieldControl<CtlWireFormatConfig>(
             source,
-            Descriptors.Choice("display.wire-format", instance, "Colour format", choices, placement),
+            DriverDescriptors.Choice("display.wire-format", instance, "Colour format", choices, placement),
             static (control, current) => ControlRead.Of(CurrentCode(current.Current) is { } code
                 ? control.MemberOf(code)
                 : null),
@@ -494,7 +495,7 @@ internal static unsafe class DisplaySettingControls
 
             controls.Add(new FieldControl<CtlDisplaySettings>(
                 source,
-                Descriptors.Choice(row.Id, instance, row.Label, row.Members, placement.Plus(controls.Count)),
+                DriverDescriptors.Choice(row.Id, instance, row.Label, row.Members, placement.Plus(controls.Count)),
                 (control, current) => ControlRead.Of(row.Get(current) is var raw and >= 0
                     ? control.MemberOf((uint)raw)
                     : null),

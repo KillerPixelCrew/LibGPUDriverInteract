@@ -150,10 +150,6 @@ internal abstract class IntelControl
 {
     private static readonly GpuValue True = GpuValue.Boolean(true);
     private static readonly GpuValue False = GpuValue.Boolean(false);
-    private bool _traced;
-    private bool _tracedAvailable;
-    private ControlFailure? _tracedFailure;
-    private GpuValue? _tracedValue;
 
     protected IntelControl(
         GpuDescriptor descriptor,
@@ -234,29 +230,9 @@ internal abstract class IntelControl
     /// <returns><see langword="true" /> when it may be written.</returns>
     public virtual bool Validate(GpuValue? value, out string? error)
     {
-        if (value is null || value.Kind != Descriptor.ValueKind)
-        {
-            error = $"A {Descriptor.ValueKind} value is required.";
-            return false;
-        }
-
-        switch (value.Kind)
-        {
-            case GpuValueKind.Boolean when value.BooleanValue is null:
-                error = "The boolean is missing.";
-                return false;
-            case GpuValueKind.Integer when value.IntegerValue is not { } integer
-                                           || Range is not { } range
-                                           || !range.Accepts(integer):
-                error = $"The value must be {Descriptor.Minimum}-{Descriptor.Maximum} in steps of {Descriptor.Step}.";
-                return false;
-            case GpuValueKind.Choice when EnumMembers.ById(Members, value.ChoiceValue) is null:
-                error = $"'{value.ChoiceValue}' is not an offered choice.";
-                return false;
-            default:
-                error = null;
-                return true;
-        }
+        var valid = DriverDescriptors.Accepts(Descriptor, value, Range);
+        error = valid ? null : "The value is not offered by this driver control.";
+        return valid;
     }
 
     /// <summary>The published choice for a driver value.</summary>
@@ -273,26 +249,6 @@ internal abstract class IntelControl
     public uint ValueOf(GpuValue value)
     {
         return EnumMembers.ById(Members, value.ChoiceValue)!.Value;
-    }
-
-    /// <summary>Whether what a read produced differs from what was last traced, remembering it when it does.</summary>
-    /// <param name="value">The value published.</param>
-    /// <param name="available">Whether the control is available.</param>
-    /// <param name="failure">Why the read failed, if it did.</param>
-    /// <returns><see langword="true" /> when a trace line is due.</returns>
-    /// <remarks>Checked before a line is formatted, so an unchanged pass builds no strings.</remarks>
-    public bool TraceDue(GpuValue? value, bool available, ControlFailure? failure)
-    {
-        if (_traced && _tracedValue == value && _tracedAvailable == available && _tracedFailure == failure)
-        {
-            return false;
-        }
-
-        _traced = true;
-        _tracedValue = value;
-        _tracedAvailable = available;
-        _tracedFailure = failure;
-        return true;
     }
 
     /// <summary>Writes a value <see cref="Validate" /> accepted.</summary>
