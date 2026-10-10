@@ -3,7 +3,6 @@
 using System.Diagnostics;
 using LibGPUDriverInteract.Amd;
 using LibGPUDriverInteract.Intel;
-using LibGPUDriverInteract.Intel.Graphics;
 using LibGPUDriverInteract.Nvidia;
 using LibGPUDriverInteract.Runtime;
 
@@ -65,14 +64,10 @@ public sealed class GpuDriver : IAsyncDisposable
         return new GpuDriver(runtime, stateDirectory, diagnostics);
     }
 
-    /// <summary>Detects installed Intel, AMD and NVIDIA adapter vendors without opening driver sessions.</summary>
+    /// <summary>Detects present Intel, AMD and NVIDIA display adapter vendors without opening driver sessions.</summary>
     public static IReadOnlyList<GpuVendor> DetectVendors()
     {
-        var adapters = AdapterClassKey.Enumerate(WindowsRegistryNode.LocalMachine, AdapterClassKey.ClassPath,
-            DriverLog.None);
-        return new[] { (GpuVendor.Intel, "8086"), (GpuVendor.Amd, "1002"), (GpuVendor.Nvidia, "10de") }
-            .Where(vendor => adapters.Any(adapter => adapter.MatchingDeviceId?.Contains("ven_" + vendor.Item2,
-                StringComparison.OrdinalIgnoreCase) == true)).Select(vendor => vendor.Item1).ToArray();
+        return WindowsGpuVendors.Collect();
     }
 
     /// <summary>Raised for a complete detached descriptor replacement.</summary>
