@@ -204,8 +204,8 @@ internal sealed class NvOutputModeControl(
 }
 
 internal sealed class NvGsyncControl(INvProfiles api, string section)
-    : DriverControl(DriverDescriptors.Toggle("graphics.gsync", "driver", "G-SYNC enabled", section,
-        GpuProfileScope.GlobalOnly))
+    : DriverControl(DriverDescriptors.Toggle("graphics.gsync", "driver", "G-SYNC enabled",
+        new Placement(section, null, 0, GpuProfileScope.GlobalOnly), GpuRole.VariableRefreshRate))
 {
     private readonly NvDrsSetting _drs = new(api, 0x1094f157);
 
