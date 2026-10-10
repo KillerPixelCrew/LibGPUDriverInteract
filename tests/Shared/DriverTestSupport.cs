@@ -87,16 +87,13 @@ internal sealed class DriverTestSession(params DriverControl[] controls) : IDriv
 internal sealed class DriverTestControl(string id = "enabled")
     : DriverControl(DriverDescriptors.Toggle(id, "driver", id, "graphics", GpuProfileScope.GlobalOnly))
 {
-    internal string? SharedSupportKey { get; init; }
-    internal override string SupportKey => SharedSupportKey ?? base.SupportKey;
     internal Func<GpuValue>? Reading { get; set; }
     internal Action? BeforeWrite { get; set; }
     internal Action? AfterWrite { get; set; }
     internal bool IgnoreWrites { get; set; }
-    internal bool RefuseProbe { get; set; }
+    internal bool RefuseWrites { get; set; }
     internal int Reads { get; private set; }
     internal int Writes { get; private set; }
-    internal int Probes { get; private set; }
     internal bool Value { get; set; }
 
     internal override GpuValue Read()
@@ -109,6 +106,11 @@ internal sealed class DriverTestControl(string id = "enabled")
     {
         BeforeWrite?.Invoke();
         admission.Check();
+        if (RefuseWrites)
+        {
+            throw new DriverFailure("Fixture setter unsupported.");
+        }
+
         Writes++;
         if (!IgnoreWrites)
         {
@@ -118,14 +120,4 @@ internal sealed class DriverTestControl(string id = "enabled")
         AfterWrite?.Invoke();
     }
 
-    internal override void ProbeSupport(GpuValue current, WriteAdmission admission)
-    {
-        Probes++;
-        if (RefuseProbe)
-        {
-            throw new DriverFailure("Fixture setter unsupported.");
-        }
-
-        base.ProbeSupport(current, admission);
-    }
 }

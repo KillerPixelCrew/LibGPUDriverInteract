@@ -85,6 +85,36 @@ public sealed record GpuSection
 
     /// <summary>Declared categories within the group.</summary>
     public IReadOnlyList<GpuCategory> Categories { get; init; } = [];
+
+    /// <summary>Read-only Windows monitor identity and current route for a physical output section.</summary>
+    /// <remarks>Null for adapter-wide controls. Friendly titles and capability instance IDs are not monitor identities.</remarks>
+    public GpuDisplayTarget? DisplayTarget { get; init; }
+}
+
+/// <summary>A physical driver output's observed Windows monitor identity and session route.</summary>
+/// <remarks>Routes are refreshed on topology discovery. Persist the monitor identity, never GDI numbering or native output IDs.</remarks>
+public sealed record GpuDisplayTarget
+{
+    /// <summary>Exact Windows monitor device-interface path, when resolved.</summary>
+    public string? DevicePath { get; init; }
+
+    /// <summary>EDID manufacturer, product and serial identity, when available.</summary>
+    public string? EdidIdentity { get; init; }
+
+    /// <summary>Current GDI source name, such as <c>\\.\DISPLAY1</c>, when the output is active.</summary>
+    public string? SourceName { get; init; }
+
+    /// <summary>Current CCD adapter LUID low part.</summary>
+    public uint? AdapterLowPart { get; init; }
+
+    /// <summary>Current CCD adapter LUID high part.</summary>
+    public int? AdapterHighPart { get; init; }
+
+    /// <summary>Current CCD target identifier.</summary>
+    public uint? TargetId { get; init; }
+
+    /// <summary>Vendor-native output identity for diagnostics; never a cross-vendor Windows route.</summary>
+    public string? NativeOutputId { get; init; }
 }
 
 /// <summary>A plain subgroup within a driver section.</summary>

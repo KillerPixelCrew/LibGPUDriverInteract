@@ -93,7 +93,7 @@ internal sealed unsafe partial class AdlxSession
                 "freesync-color-accuracy", "FreeSync color accuracy"));
         }
 
-        if (_dither is not null && _mapping != 0)
+        if (_dither is { SupportsDithering: true } && _mapping != 0)
         {
             Try(instance + "/dithering", () =>
             {
@@ -134,9 +134,9 @@ internal sealed unsafe partial class AdlxSession
         {
             controls.Add(new AdlxControl(DriverDescriptors.Toggle("display." + id, instance, label, section,
                         GpuProfileScope.GlobalOnly) with
-                    {
-                        Role = role
-                    },
+            {
+                Role = role
+            },
                 () => GpuValue.Boolean(AdlxNative.Boolean(feature.Pointer, 4)), (value, admission) =>
                 {
                     RequireSupported(feature);

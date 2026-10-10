@@ -1,5 +1,4 @@
 using System.Buffers.Binary;
-using System.ComponentModel;
 using System.Runtime.InteropServices;
 using System.Text;
 using LibGPUDriverInteract.Runtime;
@@ -250,7 +249,7 @@ internal sealed unsafe partial class NvApi : INvProfiles, IDisposable
     {
         var profiles = new List<NvNamedProfile>();
         var enumerate = (delegate* unmanaged[Cdecl]<nint, uint, nint*, int>)Function(0xbc371ee0);
-        for (uint index = 0;; index++)
+        for (uint index = 0; ; index++)
         {
             nint profile = 0;
             var status = enumerate(Drs, index, &profile);
@@ -401,27 +400,57 @@ internal sealed unsafe partial class NvApi : INvProfiles, IDisposable
             }
         }
 
-        IReadOnlyList<ActiveDisplayPath> paths;
-        try
-        {
-            paths = displays.Count == 0 ? [] : DisplayTopology.CaptureActive().Paths;
-        }
-        catch (Win32Exception)
-        {
-            // Driver-global profiles remain usable when Windows has no queryable display topology.
-            paths = [];
-        }
-
+        var routes = displays.Count == 0 ? new DriverDisplayTargets([], []) : DriverDisplayTargets.Capture();
         foreach (var display in displays.Keys.ToArray())
         {
-            var matches = paths.Where(path => DisplayId(path.SourceName) == display).ToArray();
-            if (matches.Length == 1)
+            var matches = routes.Active.Where(path => DisplayId(path.SourceName) == display).ToArray();
+            var sourceName = matches.Length == 1 ? matches[0].SourceName : null;
+            var target = matches.Length == 1 ? matches[0].Target : null;
+            string? edid = null;
+            if (target is null)
             {
-                displays[display] = displays[display] with { Target = matches[0].Target };
+                // GetDisplayIdByDisplayName only resolves active outputs. The native EDID query also
+                // reaches connected inactive outputs without enabling them or guessing by a name.
+                try
+                {
+                    edid = DisplayEdid.ParseIdentity(ReadEdid(display));
+                    target = routes.ByEdid(edid);
+                }
+                catch (DriverFailure failure) when (!failure.Lost)
+                {
+                }
             }
+
+            displays[display] = displays[display] with
+            {
+                Target = target,
+                Route = routes.Describe(target, display.ToString("x8"), sourceName, edid)
+            };
         }
 
         return displays.Values.OrderBy(output => output.Id).ToArray();
+    }
+
+    /// <summary>Reads the documented NV_EDID_DATA_V1 by native display ID, including inactive connectors.</summary>
+    internal byte[] ReadEdid(uint display)
+    {
+        var get = (delegate* unmanaged[Cdecl]<uint, NvEdidData*, uint*, int>)Function(0x436ced76);
+        var data = new NvEdidData { Version = Version(sizeof(NvEdidData), 1) };
+        uint flags = 0;
+        Check(get(display, &data, &flags), "DISP_GetEdidData size");
+        if (data.Size is < 128 or > 32768)
+        {
+            throw new DriverFailure("The NVIDIA display EDID size is invalid.");
+        }
+
+        var bytes = new byte[data.Size];
+        fixed (byte* pointer = bytes)
+        {
+            data.Data = pointer;
+            Check(get(display, &data, &flags), "DISP_GetEdidData");
+        }
+
+        return bytes;
     }
 
     private uint? DisplayId(string sourceName)
@@ -589,4 +618,12 @@ internal sealed unsafe partial class NvApi : INvProfiles, IDisposable
     }
 }
 
-internal sealed record NvOutput(uint Id, nint Gpu, DisplayTargetIdentity? Target = null);
+internal sealed record NvOutput(uint Id, nint Gpu, DisplayTargetIdentity? Target = null, GpuDisplayTarget? Route = null);
+
+[StructLayout(LayoutKind.Sequential)]
+internal unsafe struct NvEdidData
+{
+    internal uint Version;
+    internal byte* Data;
+    internal uint Size;
+}

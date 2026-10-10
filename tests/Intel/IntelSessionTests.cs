@@ -76,7 +76,7 @@ public sealed class IntelSessionTests
     }
 
     [Fact]
-    public void FailedNativeSupportProbeIsNotRepeatedAfterExplicitStopStart()
+    public void ReportedNativeControlIsNotTestWrittenDuringStartupOrRestart()
     {
         using var directory = new TemporaryDirectory();
         var native = new FakeIgclDriver { WriteResult = 0x40000017 };
@@ -85,12 +85,12 @@ public sealed class IntelSessionTests
         try
         {
             runtime.Start(sink, directory.Root, () => true, CancellationToken.None);
-            Assert.Empty(sink.Descriptors!.Descriptors);
-            Assert.Equal(1, native.Writes);
+            Assert.Single(sink.Descriptors!.Descriptors);
+            Assert.Equal(0, native.Writes);
             runtime.Close();
             runtime.Start(sink, directory.Root, () => true, CancellationToken.None);
-            Assert.Empty(sink.Descriptors!.Descriptors);
-            Assert.Equal(1, native.Writes);
+            Assert.Single(sink.Descriptors!.Descriptors);
+            Assert.Equal(0, native.Writes);
             Assert.Equal(2, native.Opens);
         }
         finally
@@ -100,11 +100,11 @@ public sealed class IntelSessionTests
     }
 
     [Fact]
-    public void UnreadableSupportValueKeepsTheReportedControlAndOnlyTopologyRetriesTheProbe()
+    public void UnreadableSupportValueKeepsTheReportedControlWithoutTopologyWrites()
     {
         using var directory = new TemporaryDirectory();
         var native = new FakeIgclDriver
-            { ReadResult = read => read == 1 ? IgclResult.InvalidArgument : IgclResult.Success };
+        { ReadResult = read => read == 1 ? IgclResult.InvalidArgument : IgclResult.Success };
         var sink = new RecordingDriverSink();
         var runtime = Runtime(native);
         try
@@ -117,7 +117,7 @@ public sealed class IntelSessionTests
             runtime.Observe(CancellationToken.None);
             Assert.Equal(0, native.Writes);
             runtime.RefreshTopology(CancellationToken.None);
-            Assert.Equal(1, native.Writes);
+            Assert.Equal(0, native.Writes);
             Assert.Equal(1, native.Opens);
         }
         finally
@@ -178,7 +178,8 @@ public sealed class IntelSessionTests
             {
                 completion.SetException(failure);
             }
-        }) { IsBackground = true };
+        })
+        { IsBackground = true };
         caller.Start();
         var (thread, result) = await completion.Task.WaitAsync(TimeSpan.FromSeconds(5));
         Assert.Equal(GpuCommandOutcome.AppliedVerified, result.Outcome);
@@ -254,7 +255,8 @@ public sealed class IntelSessionTests
         var descriptor = Assert.Single(set.Descriptors);
         return new GpuCommand
         {
-            CapabilityId = descriptor.CapabilityId, InstanceId = descriptor.InstanceId,
+            CapabilityId = descriptor.CapabilityId,
+            InstanceId = descriptor.InstanceId,
             RequestedValue = GpuValue.Choice("integer")
         };
     }

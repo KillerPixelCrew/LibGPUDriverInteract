@@ -52,6 +52,15 @@ An accepted setter remains `AppliedUnverified` when readback is absent, fails or
 requested value is published as observed. Only matching independent readback returns
 `AppliedVerified`. `Indeterminate` never authorizes automatic retries. Written observations remain
 visible until native confirmation or a later independent change. Failed observations do not hide
-writable controls. Intel support probes stay required; AMD and NVIDIA probes remain until hardware
-evidence supports query-only discovery. Stop returns false if cancellation bounds its wait before
+writable controls. Startup and topology discovery use native capability queries without dispatching
+setters to test support. Writing an identical display value can retrain the link, so only explicit
+commands apply display settings. Stop returns false if cancellation bounds its wait before
 retirement completes; the owned native call and DLL remain alive until safe cleanup.
+
+Physical output sections carry `GpuSection.DisplayTarget`. Its exact monitor `DevicePath` and
+`EdidIdentity` describe the physical monitor, while adapter LUID/target id and `SourceName` describe
+the current Windows route. The driver-native output id is diagnostic metadata. Routes may change
+after reboot or hotplug; resolve remembered display choices from monitor identity against the latest
+descriptor set. Adapter-wide display policies have no physical target. Discovery includes connected
+inactive monitors when the native interface resolves them; duplicate EDID serials are not guessed
+into a route by their friendly label.

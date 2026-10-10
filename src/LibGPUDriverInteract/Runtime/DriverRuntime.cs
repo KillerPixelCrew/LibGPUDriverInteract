@@ -26,14 +26,8 @@ internal abstract class DriverControl(GpuDescriptor descriptor)
 {
     internal GpuDescriptor Descriptor { get; } = descriptor;
     internal string Key { get; } = DriverIds.Key(descriptor.CapabilityId, descriptor.InstanceId);
-    internal virtual string SupportKey => Key;
     internal abstract GpuValue Read();
     internal abstract void Write(GpuValue value, WriteAdmission admission);
-
-    internal virtual void ProbeSupport(GpuValue current, WriteAdmission admission)
-    {
-        Write(current, admission);
-    }
 
     internal virtual bool Accepts(GpuValue? value)
     {
@@ -46,7 +40,6 @@ internal abstract class DriverControl(GpuDescriptor descriptor)
 internal sealed class DriverRuntime(string id, Func<string, IDriverSink, IDriverSession> open)
 {
     private readonly Dictionary<string, GpuState> _published = [];
-    private readonly Dictionary<string, string?> _supportResults = [];
     private readonly Dictionary<string, WrittenValue> _written = [];
     private Func<bool> _active = () => false;
     private GpuDescriptorSet _descriptors = new();
@@ -75,23 +68,12 @@ internal sealed class DriverRuntime(string id, Func<string, IDriverSink, IDriver
             return;
         }
 
-        var probeStarted = false;
         try
         {
             _session.BeginPass();
-            // Discover replaces native controls. Keep their new handles even if the caller cancels a probe.
+            // Discovery is read-only. Keep replacement handles even when the caller cancels observation.
             _model = _session.Discover();
-            try
-            {
-                PublishModel(CheckSupport(_model, token, () => probeStarted = true), CancellationToken.None);
-            }
-            catch (OperationCanceledException) when (token.IsCancellationRequested)
-            {
-                PublishModel(_model, CancellationToken.None);
-                throw;
-            }
-
-            probeStarted = false;
+            PublishModel(_model, CancellationToken.None);
             Observe(token);
             if (_session is null)
             {
@@ -107,8 +89,7 @@ internal sealed class DriverRuntime(string id, Func<string, IDriverSink, IDriver
         catch (DriverFailure failure) when (failure.Lost)
         {
             Lose(failure.Message);
-            // A support probe may have mutated state before its final read failed. Never retry that pass.
-            if (!probeStarted && !failure.Attempted)
+            if (!failure.Attempted)
             {
                 ReopenAfterReadLoss(token);
             }
@@ -325,7 +306,7 @@ internal sealed class DriverRuntime(string id, Func<string, IDriverSink, IDriver
             _session.Initialize(new WriteAdmission(token, _active), token);
             token.ThrowIfCancellationRequested();
             _session.BeginPass();
-            PublishModel(CheckSupport(_session.Discover(), token), token);
+            PublishModel(_session.Discover(), token);
             Observe(token);
             _sink!.ReportHealth(_model.Controls.Count == 0 ? GpuHealth.Unavailable : GpuHealth.Ready,
                 _model.Controls.Count == 0
@@ -338,85 +319,13 @@ internal sealed class DriverRuntime(string id, Func<string, IDriverSink, IDriver
         }
     }
 
-    private DriverModel CheckSupport(DriverModel discovered, CancellationToken token, Action? beforeProbe = null)
-    {
-        var values = new Dictionary<string, GpuValue>();
-        foreach (var control in discovered.Controls.Where(control => control.Descriptor.SupportsWrite
-                                                                     && control.Descriptor.Role != GpuRole.Action))
-        {
-            token.ThrowIfCancellationRequested();
-            if (_supportResults.ContainsKey(control.SupportKey))
-            {
-                continue;
-            }
-
-            try
-            {
-                values[control.Key] = control.Read();
-            }
-            catch (Exception failure) when (failure is not OperationCanceledException and not OutOfMemoryException
-                                                and not DriverFailure { Lost: true })
-            {
-                // Missing readback is not evidence that the setter is unsupported. Keep the control usable.
-                _sink!.LogChange(GpuLogLevel.Info, id, "support/" + control.SupportKey,
-                    "Support read unavailable; control remains available: " + failure.Message);
-            }
-        }
-
-        var admission = new WriteAdmission(token, _active);
-        foreach (var control in discovered.Controls.Where(control => values.ContainsKey(control.Key)))
-        {
-            if (_supportResults.ContainsKey(control.SupportKey))
-            {
-                continue;
-            }
-
-            try
-            {
-                beforeProbe?.Invoke();
-                control.ProbeSupport(values[control.Key], admission);
-                _supportResults[control.SupportKey] = null;
-            }
-            catch (DriverFailure failure) when (!failure.Attempted && !admission.Admitted)
-            {
-                throw new OperationCanceledException(failure.Message, failure, token);
-            }
-            catch (Exception failure) when (failure is not OperationCanceledException and not OutOfMemoryException)
-            {
-                // A dispatched failed or uncertain support write is never automatically repeated.
-                _supportResults[control.SupportKey] = failure.Message;
-                if (failure is DriverFailure { Lost: true })
-                {
-                    throw;
-                }
-            }
-
-            _sink!.LogChange(GpuLogLevel.Info, id, "support/" + control.SupportKey,
-                _supportResults[control.SupportKey] is { } detail
-                    ? "Support round trip failed; control omitted: " + detail
-                    : "Support round trip succeeded; current native state retained.");
-        }
-
-        return discovered with
-        {
-            Controls = discovered.Controls.Where(control => !_supportResults.TryGetValue(control.SupportKey,
-                out var failure) || failure is null).ToArray()
-        };
-    }
-
     private void PublishModel(DriverModel model, CancellationToken token)
     {
-        // Discovery may replace native handles after cancellation. Keep those handles, with the same
-        // failed-setter filtering used by a completed support pass, in every publication path.
-        model = model with
-        {
-            Controls = model.Controls.Where(control => !_supportResults.TryGetValue(control.SupportKey,
-                out var failure) || failure is null).ToArray()
-        };
         _model = model;
         var descriptors = new GpuDescriptorSet
         {
-            Sections = model.Sections, Descriptors = model.Controls.Select(control => control.Descriptor).ToArray()
+            Sections = model.Sections,
+            Descriptors = model.Controls.Select(control => control.Descriptor).ToArray()
         };
         if (SameModel(_descriptors, descriptors))
         {
@@ -455,11 +364,13 @@ internal sealed class DriverRuntime(string id, Func<string, IDriverSink, IDriver
     {
         var state = new GpuState
         {
-            CapabilityId = control.Descriptor.CapabilityId, InstanceId = control.Descriptor.InstanceId,
+            CapabilityId = control.Descriptor.CapabilityId,
+            InstanceId = control.Descriptor.InstanceId,
             ObservedValue = value,
             Available = value is not null || control.Descriptor.SupportsWrite ||
                         control.Descriptor.Role == GpuRole.Action,
-            Reason = error is null ? null : new GpuReason(GpuReasonCode.TransportFaulted, error), Quality = quality
+            Reason = error is null ? null : new GpuReason(GpuReasonCode.TransportFaulted, error),
+            Quality = quality
         };
         if (_published.GetValueOrDefault(control.Key) == state)
         {

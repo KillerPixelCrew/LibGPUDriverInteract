@@ -135,7 +135,10 @@ internal sealed class NvSession : IDriverSession
             if (controls.Count > before)
             {
                 sections.Add(DriverDescriptors.Section(section,
-                    "NVIDIA " + (output.Target?.FriendlyName ?? "display " + output.Id.ToString("X8")), true));
+                    "NVIDIA " + (output.Target?.FriendlyName ?? "display " + output.Id.ToString("X8")), true) with
+                {
+                    DisplayTarget = output.Route
+                });
             }
         }
 
@@ -275,26 +278,6 @@ internal sealed class NvDrsSetting(INvProfiles api, uint id)
         api.Load();
     }
 
-    internal void Probe(WriteAdmission admission)
-    {
-        // Save identical explicit values. Reload discards staged inherited/default values without
-        // materializing a persistent user override.
-        api.Load();
-        try
-        {
-            var profile = api.GlobalProfile();
-            var native = api.Get(profile, id);
-            api.Set(profile, id, native.Value, admission);
-            if (native.Explicit)
-            {
-                api.Save(admission);
-            }
-        }
-        finally
-        {
-            api.Load();
-        }
-    }
 }
 
 internal sealed class NvSettingControl : DriverControl
@@ -312,11 +295,6 @@ internal sealed class NvSettingControl : DriverControl
     }
 
     internal NvSettingDefinition Setting { get; }
-
-    internal override void ProbeSupport(GpuValue current, WriteAdmission admission)
-    {
-        _drs.Probe(admission);
-    }
 
     internal override GpuValue Read()
     {

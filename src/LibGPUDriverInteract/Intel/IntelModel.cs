@@ -138,7 +138,7 @@ internal sealed class IntelModel
             List<IntelControl> built = [];
             BuildDisplay(session, output, identity, sectionId, ref vrrTaken, colors, built, log);
             if (Section(sectionId, name, "Intel display settings", GpuSectionKind.Display, DisplayCategories, built,
-                    controls, sections))
+                    controls, sections, identity.Target))
             {
                 semanticVrrTaken = vrrTaken;
             }
@@ -171,7 +171,8 @@ internal sealed class IntelModel
         IReadOnlyList<GpuCategory> categories,
         List<IntelControl> built,
         List<IntelControl> controls,
-        List<GpuSection> sections)
+        List<GpuSection> sections,
+        GpuDisplayTarget? displayTarget = null)
     {
         if (built.Count == 0)
         {
@@ -186,7 +187,8 @@ internal sealed class IntelModel
             Description = description,
             Kind = kind,
             SortOrder = sections.Count,
-            Categories = categories
+            Categories = categories,
+            DisplayTarget = displayTarget
         });
         return true;
     }

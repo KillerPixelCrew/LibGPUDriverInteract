@@ -74,14 +74,6 @@ internal sealed class NvColorControl(
     : DriverControl(DriverDescriptors.Choice("display.color." + field.Id, instance, field.Label, section,
         GpuProfileScope.GlobalOnly, values.Select(value => (NvSettingControl.Encode(value.Value), value.Label))))
 {
-    internal override string SupportKey => "color/" + instance;
-
-    internal override void ProbeSupport(GpuValue current, WriteAdmission admission)
-    {
-        var data = api.Color(output.Id, 1);
-        api.SetColor(output.Id, data, admission);
-    }
-
     internal override GpuValue Read()
     {
         return GpuValue.Choice(NvSettingControl.Encode(field.Read(api.ReadColor(output.Id))));
@@ -111,13 +103,6 @@ internal sealed class NvDitherControl(
         GpuProfileScope.GlobalOnly,
         values.Select(value => (NvSettingControl.Encode(value.Value), value.Label))))
 {
-    internal override string SupportKey => "dithering/" + instance;
-
-    internal override void ProbeSupport(GpuValue current, WriteAdmission admission)
-    {
-        api.SetDither(output, api.Dither(output.Id), admission, true);
-    }
-
     internal override GpuValue Read()
     {
         var data = api.Dither(output.Id);
@@ -158,12 +143,6 @@ internal sealed class NvOutputModeControl(
     : DriverControl(DriverDescriptors.Choice("display.hdr-output-mode", instance, "HDR output mode", section,
         GpuProfileScope.GlobalOnly, values.Select(value => (NvSettingControl.Encode(value.Value), value.Label))))
 {
-    internal override void ProbeSupport(GpuValue current, WriteAdmission admission)
-    {
-        var mode = api.OutputMode(expected.Id);
-        api.SetOutputMode(expected.Id, mode, admission);
-    }
-
     internal override GpuValue Read()
     {
         return GpuValue.Choice(NvSettingControl.Encode(api.OutputMode(expected.Id)));
@@ -229,11 +208,6 @@ internal sealed class NvGsyncControl(INvProfiles api, string section)
         GpuProfileScope.GlobalOnly))
 {
     private readonly NvDrsSetting _drs = new(api, 0x1094f157);
-
-    internal override void ProbeSupport(GpuValue current, WriteAdmission admission)
-    {
-        _drs.Probe(admission);
-    }
 
     internal override GpuValue Read()
     {

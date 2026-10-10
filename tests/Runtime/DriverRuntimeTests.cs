@@ -7,12 +7,42 @@ namespace LibGPUDriverInteract.Tests.Runtime;
 public sealed class DriverRuntimeTests
 {
     [Fact]
-    public void DiscoveryReadsAllControlsBeforeOneProbePerSharedNativeStructure()
+    public void TopologyPublishesNewPhysicalRoutingMetadataEvenWhenLabelsAndControlsAreUnchanged()
+    {
+        using var directory = new TemporaryDirectory();
+        var control = new DriverTestControl();
+        var section = DriverDescriptors.Section("graphics", "Same monitor label", true) with
+        {
+            DisplayTarget = new GpuDisplayTarget { DevicePath = "monitor-one", TargetId = 7 }
+        };
+        var session = new DriverTestSession(control) { Model = new DriverModel([section], [control]) };
+        var sink = new RecordingDriverSink();
+        var runtime = new DriverRuntime("fixture", (_, _) => session);
+        try
+        {
+            runtime.Start(sink, directory.Root, () => true, CancellationToken.None);
+            session.Model = new DriverModel([section with
+            {
+                DisplayTarget = section.DisplayTarget! with { TargetId = 8 }
+            }], [control]);
+            runtime.RefreshTopology(CancellationToken.None);
+            Assert.Equal(2, sink.DescriptorPublications);
+            Assert.Equal(8u, sink.Descriptors!.Sections[0].DisplayTarget!.TargetId);
+            Assert.Equal(0, control.Writes);
+        }
+        finally
+        {
+            runtime.Close();
+        }
+    }
+
+    [Fact]
+    public void StartupObservationAndTopologyNeverDispatchSupportWrites()
     {
         using var directory = new TemporaryDirectory();
         var order = new List<string>();
-        var first = new DriverTestControl { SharedSupportKey = "shared" };
-        var second = new DriverTestControl("second") { SharedSupportKey = "shared" };
+        var first = new DriverTestControl();
+        var second = new DriverTestControl("second");
         first.Reading = () =>
         {
             order.Add("first.read");
@@ -30,14 +60,17 @@ public sealed class DriverRuntimeTests
         try
         {
             Assert.Equal(GpuHealth.Ready, runtime.Start(sink, directory.Root, () => true, CancellationToken.None));
-            Assert.Equal(new[] { "first.read", "second.read", "first.write" }, order.Take(3));
-            Assert.Equal(1, first.Probes);
-            Assert.Equal(0, second.Probes);
+            Assert.Equal(new[] { "first.read", "second.read" }, order);
+            Assert.Equal(0, first.Writes);
+            Assert.Equal(0, second.Writes);
             Assert.Equal(2, sink.Descriptors!.Descriptors.Count);
             Assert.Equal(1, session.Discoveries);
             runtime.Observe(CancellationToken.None);
             Assert.Equal(1, session.Discoveries);
             Assert.Equal(1, sink.DescriptorPublications);
+            runtime.RefreshTopology(CancellationToken.None);
+            Assert.Equal(0, first.Writes);
+            Assert.Equal(0, second.Writes);
         }
         finally
         {
@@ -46,7 +79,7 @@ public sealed class DriverRuntimeTests
     }
 
     [Fact]
-    public void FailedReadKeepsWritableControlsAndOnlyExplicitTopologyRetriesItsProbe()
+    public void FailedReadKeepsWritableControlsWithoutWritingDuringTopology()
     {
         using var directory = new TemporaryDirectory();
         var control = new DriverTestControl();
@@ -59,12 +92,12 @@ public sealed class DriverRuntimeTests
             runtime.Start(sink, directory.Root, () => true, CancellationToken.None);
             Assert.Single(sink.Descriptors!.Descriptors);
             Assert.True(sink.States.Last().Available);
-            Assert.Equal(0, control.Probes);
+            Assert.Equal(0, control.Writes);
             control.Reading = null;
             runtime.Observe(CancellationToken.None);
-            Assert.Equal(0, control.Probes);
+            Assert.Equal(0, control.Writes);
             runtime.RefreshTopology(CancellationToken.None);
-            Assert.Equal(1, control.Probes);
+            Assert.Equal(0, control.Writes);
             Assert.Equal(2, session.Discoveries);
         }
         finally
@@ -74,20 +107,21 @@ public sealed class DriverRuntimeTests
     }
 
     [Fact]
-    public void FailedSupportWriteIsOmittedAndNotRepeatedAfterStopStart()
+    public void ASetterRefusalIsReportedOnlyForAnExplicitCommandAndDoesNotHideDiscoveredSupport()
     {
         using var directory = new TemporaryDirectory();
-        var control = new DriverTestControl { RefuseProbe = true };
+        var control = new DriverTestControl { RefuseWrites = true };
         var sink = new RecordingDriverSink();
         var runtime = new DriverRuntime("fixture", (_, _) => new DriverTestSession(control));
         try
         {
             runtime.Start(sink, directory.Root, () => true, CancellationToken.None);
-            Assert.Empty(sink.Descriptors!.Descriptors);
+            Assert.Single(sink.Descriptors!.Descriptors);
+            Assert.Equal(GpuCommandOutcome.Rejected, runtime.Execute(Command(), CancellationToken.None).Outcome);
             runtime.Close();
             runtime.Start(sink, directory.Root, () => true, CancellationToken.None);
-            Assert.Empty(sink.Descriptors!.Descriptors);
-            Assert.Equal(1, control.Probes);
+            Assert.Single(sink.Descriptors!.Descriptors);
+            Assert.Equal(0, control.Writes);
         }
         finally
         {
@@ -182,7 +216,7 @@ public sealed class DriverRuntimeTests
             native = false;
             runtime.Observe(CancellationToken.None);
             Assert.False(sink.States.Last().ObservedValue!.BooleanValue);
-            Assert.Equal(2, control.Writes);
+            Assert.Equal(1, control.Writes);
         }
         finally
         {
@@ -191,11 +225,11 @@ public sealed class DriverRuntimeTests
     }
 
     [Fact]
-    public void CancelledTopologyRetainsNewHandlesButNeverRepublishesKnownFailedSetterProbes()
+    public void CancelledTopologyRetainsNewHandlesWithoutDispatchingSetters()
     {
         using var directory = new TemporaryDirectory();
         using var cancellation = new CancellationTokenSource();
-        var failed = new DriverTestControl { RefuseProbe = true };
+        var failed = new DriverTestControl { RefuseWrites = true };
         var good = new DriverTestControl("good");
         var session = new DriverTestSession(failed, good);
         var sink = new RecordingDriverSink();
@@ -208,14 +242,14 @@ public sealed class DriverRuntimeTests
             session.Model = new DriverModel(session.Model.Sections, [replacementFailed, replacementGood]);
             session.BeforeDiscover = cancellation.Cancel;
             Assert.Throws<OperationCanceledException>(() => runtime.RefreshTopology(cancellation.Token));
-            Assert.Equal("good", Assert.Single(sink.Descriptors!.Descriptors).CapabilityId);
-            Assert.Equal(1, failed.Probes);
-            Assert.Equal(0, replacementFailed.Probes);
+            Assert.Equal(2, sink.Descriptors!.Descriptors.Count);
+            Assert.Equal(0, failed.Writes);
+            Assert.Equal(0, replacementFailed.Writes);
             var command = new GpuCommand
-                { CapabilityId = "good", InstanceId = "driver", RequestedValue = GpuValue.Boolean(true) };
+            { CapabilityId = "good", InstanceId = "driver", RequestedValue = GpuValue.Boolean(true) };
             Assert.Equal(GpuCommandOutcome.AppliedVerified, runtime.Execute(command, CancellationToken.None).Outcome);
             Assert.Equal(1, replacementGood.Writes);
-            Assert.Equal(1, good.Writes);
+            Assert.Equal(0, good.Writes);
         }
         finally
         {
@@ -230,7 +264,7 @@ public sealed class DriverRuntimeTests
         var first = new DriverTestSession(new DriverTestControl());
         var replacement = new DriverTestSession(new DriverTestControl());
         var failedReplacement = new DriverTestSession(new DriverTestControl())
-            { BeforeDiscover = () => throw new DriverFailure("Replacement also lost.", lost: true) };
+        { BeforeDiscover = () => throw new DriverFailure("Replacement also lost.", lost: true) };
         var opens = 0;
         var sink = new RecordingDriverSink();
         var runtime = new DriverRuntime("fixture",
@@ -289,7 +323,7 @@ public sealed class DriverRuntimeTests
     }
 
     [Fact]
-    public void LostSupportMutationDuringTopologyIsNeverReopenedOrReprobedAutomatically()
+    public void TopologyNeverInvokesASetterEvenWhenItsCurrentValueBecomesReadable()
     {
         using var directory = new TemporaryDirectory();
         var control = new DriverTestControl { Reading = () => throw new DriverFailure("No support read yet.") };
@@ -307,7 +341,7 @@ public sealed class DriverRuntimeTests
             runtime.RefreshTopology(CancellationToken.None);
             runtime.Observe(CancellationToken.None);
             Assert.Equal(1, opens);
-            Assert.Equal(1, control.Probes);
+            Assert.Equal(0, control.Writes);
         }
         finally
         {
@@ -365,7 +399,9 @@ public sealed class DriverRuntimeTests
     {
         return new GpuCommand
         {
-            CapabilityId = "enabled", InstanceId = "driver", RequestedValue = GpuValue.Boolean(true)
+            CapabilityId = "enabled",
+            InstanceId = "driver",
+            RequestedValue = GpuValue.Boolean(true)
         };
     }
 }

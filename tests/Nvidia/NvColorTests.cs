@@ -1,9 +1,19 @@
+using System.Runtime.InteropServices;
 using Xunit;
 
 namespace LibGPUDriverInteract.Nvidia.Tests;
 
 public sealed class NvColorTests
 {
+    [Fact]
+    public void EdidQueryUsesTheDocumentedX64PointerAlignment()
+    {
+        Assert.Equal(24, Marshal.SizeOf<NvEdidData>());
+        Assert.Equal(0, Marshal.OffsetOf<NvEdidData>(nameof(NvEdidData.Version)).ToInt32());
+        Assert.Equal(8, Marshal.OffsetOf<NvEdidData>(nameof(NvEdidData.Data)).ToInt32());
+        Assert.Equal(16, Marshal.OffsetOf<NvEdidData>(nameof(NvEdidData.Size)).ToInt32());
+    }
+
     [Fact]
     public void BitDepthEditPreservesFormatRangeColorimetryAndDesktopDepth()
     {

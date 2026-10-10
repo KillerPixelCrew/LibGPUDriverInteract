@@ -142,26 +142,26 @@ public sealed class NvProfilesTests
     }
 
     [Fact]
-    public void SupportProbeDoesNotMaterializeAnInheritedDrsSetting()
+    public void ReadingAnInheritedDrsSettingDoesNotMaterializeAnOverride()
     {
         var api = new Drs();
         api.Values[123] = 99;
         var control = Controls(api).Values.Single();
-        control.ProbeSupport(control.Read(), Admitted);
+        control.Read();
         Assert.Equal(0, api.Saves);
         Assert.False(api.Values.ContainsKey(Setting));
         Assert.Equal(99u, api.Values[123]);
     }
 
     [Fact]
-    public void SupportProbeSavesAnExplicitDrsSettingWithoutChangingIt()
+    public void ReadingAnExplicitDrsSettingDoesNotSaveTheDatabase()
     {
         var api = new Drs { GlobalExplicit = true };
         api.Values[Setting] = 9;
         api.Values[123] = 99;
         var control = Controls(api).Values.Single();
-        control.ProbeSupport(control.Read(), Admitted);
-        Assert.Equal(1, api.Saves);
+        control.Read();
+        Assert.Equal(0, api.Saves);
         Assert.Equal(9u, api.Values[Setting]);
         Assert.Equal(99u, api.Values[123]);
     }

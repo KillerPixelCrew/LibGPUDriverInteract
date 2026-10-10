@@ -39,9 +39,9 @@ public sealed class GpuDriverTests
         var control = new DescriptorControl(
             DriverDescriptors.Toggle("enabled", "driver", "Enabled", "graphics", GpuProfileScope.GlobalOnly)
                 with
-                {
-                    Choices = choices
-                });
+            {
+                Choices = choices
+            });
         var session = new DriverTestSession(control) { Model = new DriverModel(sections, [control]) };
         await using var driver = new GpuDriver(new DriverRuntime("fixture", (_, _) => session), directory.Root);
         GpuDescriptorSet? published = null;
@@ -167,7 +167,7 @@ public sealed class GpuDriverTests
             var queued = driver.ExecuteAsync(Command(), cancellation.Token).AsTask();
             cancellation.Cancel();
             Assert.Equal(GpuCommandOutcome.Rejected, (await queued.WaitAsync(TimeSpan.FromSeconds(5))).Outcome);
-            Assert.Equal(1, fixture.Control.Writes);
+            Assert.Equal(0, fixture.Control.Writes);
         }
         finally
         {
@@ -175,7 +175,7 @@ public sealed class GpuDriverTests
         }
 
         Assert.Equal(GpuCommandOutcome.AppliedVerified, (await first.WaitAsync(TimeSpan.FromSeconds(5))).Outcome);
-        Assert.Equal(2, fixture.Control.Writes);
+        Assert.Equal(1, fixture.Control.Writes);
     }
 
     [Fact]
@@ -289,7 +289,7 @@ public sealed class GpuDriverTests
     private static GpuCommand Command()
     {
         return new GpuCommand
-            { CapabilityId = "enabled", InstanceId = "driver", RequestedValue = GpuValue.Boolean(true) };
+        { CapabilityId = "enabled", InstanceId = "driver", RequestedValue = GpuValue.Boolean(true) };
     }
 
     private sealed class Fixture

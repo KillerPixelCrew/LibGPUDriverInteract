@@ -9,7 +9,8 @@ namespace LibGPUDriverInteract.Intel.Display;
 /// <param name="InstanceId">The stable capability instance id.</param>
 /// <param name="Name">The plain name for its section.</param>
 /// <param name="Internal">Whether Windows reports the output as the built-in panel.</param>
-internal sealed record DisplayIdentity(string InstanceId, string Name, bool Internal);
+/// <param name="Target">Physical monitor identity and the current Windows output route.</param>
+internal sealed record DisplayIdentity(string InstanceId, string Name, bool Internal, GpuDisplayTarget Target);
 
 /// <summary>
 ///     Resolves an IGCL output to a stable identity through Windows' own display configuration.
@@ -54,11 +55,11 @@ internal static class DisplayIdentityResolver
     /// <summary>Captures Windows monitor identities once for discovery.</summary>
     /// <param name="log">Receives the fallback decisions.</param>
     /// <returns>The captured topology, or null when Windows cannot query it.</returns>
-    public static DisplayTopologySnapshot? Capture(IDriverSink log)
+    public static DriverDisplayTargets? Capture(IDriverSink log)
     {
         try
         {
-            return DisplayTopology.CaptureActive();
+            return DriverDisplayTargets.Capture();
         }
         catch (Exception error) when (error is not OutOfMemoryException)
         {
@@ -72,13 +73,18 @@ internal static class DisplayIdentityResolver
     /// <param name="log">Receives fallback decisions.</param>
     /// <param name="topology">The capture for this discovery.</param>
     /// <returns>A stable identity, or a session-local fallback when Windows has no matching output.</returns>
-    public static DisplayIdentity Resolve(IgclOutput output, IDriverSink log, DisplayTopologySnapshot? topology)
+    public static DisplayIdentity Resolve(IgclOutput output, IDriverSink log, DriverDisplayTargets? topology)
     {
-        var path = topology?.Paths.FirstOrDefault(path =>
-            path.Target.AdapterLowPart == (uint)output.Adapter.Luid
-            && path.Target.AdapterHighPart == (int)(output.Adapter.Luid >> 32)
-            && path.Target.TargetId == output.TargetId);
-        if (path is null)
+        var target = topology?.ByRoute((uint)output.Adapter.Luid, (int)(output.Adapter.Luid >> 32), output.TargetId);
+        var nativeId = $"{output.Adapter.Luid:x16}/{output.TargetId}";
+        var metadata = topology?.Describe(target, nativeId) ?? new GpuDisplayTarget { NativeOutputId = nativeId };
+        metadata = metadata with
+        {
+            AdapterLowPart = (uint)output.Adapter.Luid,
+            AdapterHighPart = (int)(output.Adapter.Luid >> 32),
+            TargetId = output.TargetId
+        };
+        if (target is null)
         {
             log.Warn(
                 "display",
@@ -88,22 +94,23 @@ internal static class DisplayIdentityResolver
             return new DisplayIdentity(
                 (fallbackInternal ? InternalPrefix : "") + $"adapter{output.Adapter.Index}-target{output.TargetId}",
                 fallbackInternal ? "Built-in display" : $"Display {output.Index + 1}",
-                fallbackInternal);
+                fallbackInternal, metadata);
         }
 
         // IGCL's encoder flag decides; Windows' output technology only answers when IGCL does not.
         var isInternal = output.Internal
-                         ?? path.OutputTechnology is OutputInternal or OutputDisplayPortEmbedded or OutputLvds
+                         ?? topology?.Active.FirstOrDefault(path => path.Target == target)?.OutputTechnology
+                             is OutputInternal or OutputDisplayPortEmbedded or OutputLvds
                              or OutputUdiEmbedded;
-        var manufacturer = path.Target.EdidManufacturerId is { } code
+        var manufacturer = target.EdidManufacturerId is { } code
             ? ValueMapping.DecodeManufacturer(code)
             : null;
-        var instance = InstanceId(isInternal, manufacturer, path.Target.EdidProductCodeId ?? 0,
-            path.Target.DevicePath.Length > 0 ? path.Target.DevicePath : $"target-{output.TargetId}");
+        var instance = InstanceId(isInternal, manufacturer, target.EdidProductCodeId ?? 0,
+            target.DevicePath.Length > 0 ? target.DevicePath : $"target-{output.TargetId}");
         var label = isInternal
             ? "Built-in display"
-            : DriverDescriptors.Label(path.Target.FriendlyName, $"Display {output.Index + 1}");
-        return new DisplayIdentity(instance, label, isInternal);
+            : DriverDescriptors.Label(target.FriendlyName, $"Display {output.Index + 1}");
+        return new DisplayIdentity(instance, label, isInternal, metadata);
     }
 
     /// <summary>Builds the instance id of a display.</summary>

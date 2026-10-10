@@ -43,7 +43,7 @@ internal sealed class IntelSession : IDriverSession
             _colors = ColorStore.Load(stateDirectory, _log);
             _profiles = new ApplicationProfileSynchronizer(registry, stateDirectory, _log);
             _log.Info("lifecycle", $"IGCL 0x{_session.SupportedVersion:x} open: {_session.Adapters.Count} adapter(s), "
-                                   + $"{_session.Outputs.Count} active display(s).");
+                                   + $"{_session.Outputs.Count} connected display(s).");
         }
         catch
         {
@@ -101,8 +101,6 @@ internal sealed class IntelSession : IDriverSession
 
     private sealed class Control(IntelControl control, IgclSession session) : DriverControl(control.Descriptor)
     {
-        internal override string SupportKey => control.SupportKey;
-
         internal override bool Accepts(GpuValue? value)
         {
             return control.Validate(value, out _);
@@ -125,11 +123,6 @@ internal sealed class IntelSession : IDriverSession
         internal override void Write(GpuValue value, WriteAdmission admission)
         {
             Check(control.Write(value, admission));
-        }
-
-        internal override void ProbeSupport(GpuValue current, WriteAdmission admission)
-        {
-            Check(control.ProbeSupport(admission));
         }
 
         private void Check(ControlWrite result)

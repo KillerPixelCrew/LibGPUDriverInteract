@@ -36,12 +36,12 @@ internal sealed unsafe partial class NvApi
         return new NvDither(Number(data, 4), Number(data, 8), Number(data, 12), Number(data, 16), Number(data, 20));
     }
 
-    internal void SetDither(NvOutput expected, NvDither data, WriteAdmission admission, bool preserveState = false)
+    internal void SetDither(NvOutput expected, NvDither data, WriteAdmission admission)
     {
         var function = (delegate* unmanaged[Cdecl]<nint, uint, uint, uint, uint, int>)Function(0xdf0dfcdd);
         admission.Check();
-        Check(function(expected.Gpu, expected.Id, data.State, data.State == 0 && !preserveState ? 0 : data.Bits,
-            data.State == 0 && !preserveState ? 0 : data.Mode), "Disp_SetDitherControl", true);
+        Check(function(expected.Gpu, expected.Id, data.State, data.State == 0 ? 0 : data.Bits,
+            data.State == 0 ? 0 : data.Mode), "Disp_SetDitherControl", true);
     }
 }
 

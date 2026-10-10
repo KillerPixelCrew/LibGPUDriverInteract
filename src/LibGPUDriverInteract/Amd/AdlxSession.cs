@@ -3,6 +3,7 @@
 using System.Globalization;
 using System.Runtime.InteropServices;
 using LibGPUDriverInteract.Runtime;
+using WindowsDeviceControl;
 
 namespace LibGPUDriverInteract.Amd;
 
@@ -129,6 +130,7 @@ internal sealed unsafe partial class AdlxSession : IDriverSession
 
             if (_displays is not null)
             {
+                var routes = DriverDisplayTargets.Capture();
                 using var list = AdlxNative.Interface(_displays.Pointer, 4);
                 var displays = AdlxNative.Items(list.Pointer);
                 objects.AddRange(displays);
@@ -152,8 +154,22 @@ internal sealed unsafe partial class AdlxSession : IDriverSession
                         AddDisplay(display.Pointer, instance, section, objects, controls);
                         if (controls.Count > before)
                         {
+                            string? sourceName = null;
+                            Try(instance + "/windows-route", () =>
+                            {
+                                if (_mapping != 0 && _dither is not null)
+                                {
+                                    var mapped = AdlIds(display.Pointer);
+                                    sourceName = _dither.SourceName(mapped.Adapter, mapped.Display);
+                                }
+                            });
+                            var serialIdentity = EdidIdentity(edid);
+                            var target = routes.BySource(sourceName) ?? routes.ByEdid(serialIdentity);
                             sections.Add(DriverDescriptors.Section(section,
-                                "AMD " + AdlxNative.Text(display.Pointer, 6), true));
+                                "AMD " + AdlxNative.Text(display.Pointer, 6), true) with
+                            {
+                                DisplayTarget = routes.Describe(target, $"{pnp}/{id}", sourceName, serialIdentity)
+                            });
                         }
                     });
                 }
@@ -168,6 +184,19 @@ internal sealed unsafe partial class AdlxSession : IDriverSession
         {
             Release(objects);
             throw;
+        }
+    }
+
+    internal static string? EdidIdentity(string edid)
+    {
+        var hex = new string(edid.Where(character => !char.IsWhiteSpace(character)).ToArray());
+        try
+        {
+            return DisplayEdid.ParseIdentity(Convert.FromHexString(hex));
+        }
+        catch (FormatException)
+        {
+            return null;
         }
     }
 

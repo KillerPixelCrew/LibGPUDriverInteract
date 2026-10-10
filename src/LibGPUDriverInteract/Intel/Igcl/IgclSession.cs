@@ -29,7 +29,7 @@ internal sealed record IgclAdapter(
     string Name,
     bool Integrated);
 
-/// <summary>One active display output on an Intel adapter.</summary>
+/// <summary>One connected display output on an Intel adapter, including an inactive monitor.</summary>
 /// <param name="Handle">The IGCL output handle, valid for this session only.</param>
 /// <param name="Adapter">The adapter driving it.</param>
 /// <param name="Index">Output order within the adapter.</param>
@@ -64,7 +64,6 @@ internal sealed unsafe class IgclSession : IDisposable
     private const uint ImplementationVersion = (1 << 16) | 1;
 
     private const uint IntelVendorId = 0x8086;
-    private const uint DisplayActive = 1 << 0;
     private const uint DisplayAttached = 1 << 1;
 
     /// <summary><c>CTL_ENCODER_CONFIG_FLAG_INTERNAL_DISPLAY</c>.</summary>
@@ -86,7 +85,7 @@ internal sealed unsafe class IgclSession : IDisposable
     /// <summary>The Intel adapters, in enumeration order.</summary>
     public IReadOnlyList<IgclAdapter> Adapters { get; private set; } = [];
 
-    /// <summary>The active, attached display outputs of every Intel adapter.</summary>
+    /// <summary>The attached display outputs of every Intel adapter, including connected inactive monitors.</summary>
     public IReadOnlyList<IgclOutput> Outputs { get; private set; } = [];
 
     /// <summary>The IGCL version the driver implements.</summary>
@@ -191,9 +190,9 @@ internal sealed unsafe class IgclSession : IDisposable
         return null;
     }
 
-    /// <summary>Enumerates the active outputs again, for a display that was connected or disconnected.</summary>
+    /// <summary>Enumerates connected outputs again, for a display that was connected or disconnected.</summary>
     /// <returns>
-    ///     <see langword="true" /> when the set of active outputs changed; <see cref="Outputs" /> then holds
+    ///     <see langword="true" /> when the set of connected outputs changed; <see cref="Outputs" /> then holds
     ///     the new set. A failed enumeration changes nothing, so a transient error never retracts a display.
     /// </returns>
     public bool RefreshOutputs()
@@ -340,7 +339,7 @@ internal sealed unsafe class IgclSession : IDisposable
             (properties.GraphicsAdapterProperties & 1) != 0);
     }
 
-    /// <summary>Lists one adapter's active, attached outputs.</summary>
+    /// <summary>Lists one adapter's attached outputs, including inactive monitors.</summary>
     /// <param name="adapter">The adapter.</param>
     /// <returns>The outputs, or null when the enumeration itself failed.</returns>
     private List<IgclOutput>? EnumerateOutputs(IgclAdapter adapter)
@@ -374,18 +373,17 @@ internal sealed unsafe class IgclSession : IDisposable
             return null;
         }
 
-        var inactive = 0;
+        var unattached = 0;
         for (var index = 0; index < count; index++)
         {
             CtlDisplayProperties properties = default;
             if (handles[index] == 0
                 || Call(Api.GetDisplayProperties, handles[index], ref properties) != IgclResult.Success
-                || (properties.DisplayConfigFlags & (DisplayActive | DisplayAttached))
-                != (DisplayActive | DisplayAttached))
+                || (properties.DisplayConfigFlags & DisplayAttached) == 0)
             {
                 // Unattached connectors are most of any enumeration: the Claw reports twelve outputs
                 // of which one is real.
-                inactive++;
+                unattached++;
                 continue;
             }
 
@@ -396,7 +394,7 @@ internal sealed unsafe class IgclSession : IDisposable
             GpuLogLevel.Info,
             "igcl",
             $"outputs.{adapter.Index}",
-            $"Adapter {adapter.Index} ({adapter.Name}): {outputs.Count} active outputs, {inactive} inactive.");
+            $"Adapter {adapter.Index} ({adapter.Name}): {outputs.Count} attached outputs, {unattached} unattached.");
         return outputs;
     }
 

@@ -24,6 +24,8 @@ internal sealed unsafe class FakeIgclDriver
             ["ctlClose"] = new CloseCall(Close),
             ["ctlEnumerateDevices"] = new EnumerateCall(Enumerate),
             ["ctlGetDeviceProperties"] = new PropertiesCall(Properties),
+            ["ctlEnumerateDisplayOutputs"] = new EnumerateCall(EnumerateOutputs),
+            ["ctlGetDisplayProperties"] = new DisplayPropertiesCall(DisplayProperties),
             ["ctlGetSupportedRetroScalingCapability"] = new RetroCapsCall(RetroCaps),
             ["ctlGetSetRetroScaling"] = new RetroSettingsCall(RetroSettings),
             ["ctlGetSupported3DCapabilities"] = new FeatureCapsCall(FeatureCaps),
@@ -51,6 +53,7 @@ internal sealed unsafe class FakeIgclDriver
     internal Action? BeforeClose { get; set; }
     internal bool IgnoreWrites { get; set; }
     internal Ctl3dFeatureDetails[] Features { get; set; } = [];
+    internal uint[] DisplayFlags { get; set; } = [];
     internal float MinimumHz { get; set; } = 30;
     internal float MaximumHz { get; set; } = 120;
     internal uint ColorBlockCount { get; set; } = 1;
@@ -106,6 +109,28 @@ internal sealed unsafe class FakeIgclDriver
         properties->PciDeviceId = 0x4688;
         properties->Device = 2;
         properties->GraphicsAdapterProperties = 1;
+        return IgclResult.Success;
+    }
+
+    private int EnumerateOutputs(nint handle, uint* count, nint* outputs)
+    {
+        *count = (uint)DisplayFlags.Length;
+        if (outputs != null)
+        {
+            for (var index = 0; index < DisplayFlags.Length; index++)
+            {
+                outputs[index] = index + 10;
+            }
+        }
+
+        return IgclResult.Success;
+    }
+
+    private int DisplayProperties(nint handle, CtlDisplayProperties* properties)
+    {
+        var index = (int)handle - 10;
+        properties->DisplayConfigFlags = DisplayFlags[index];
+        properties->EncoderId.WindowsTargetId = (uint)index + 100;
         return IgclResult.Success;
     }
 
@@ -241,6 +266,9 @@ internal sealed unsafe class FakeIgclDriver
 
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
     private delegate int PropertiesCall(nint handle, CtlDeviceAdapterProperties* properties);
+
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+    private delegate int DisplayPropertiesCall(nint handle, CtlDisplayProperties* properties);
 
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
     private delegate int RetroCapsCall(nint handle, CtlRetroScalingCaps* caps);
