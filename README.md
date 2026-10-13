@@ -4,9 +4,10 @@ A Windows-first .NET library for Intel, AMD and NVIDIA graphics driver interacti
 engines, serialized runtime and profile ownership mechanisms were extracted from WSGM's vendor
 implementations. Applications consume a direct driver API without WSGM SDK dependencies.
 
-The source includes the library, migrated regression tests, public API and original implementation
-inventory. [Provenance](PROVENANCE.md) separates the existing engines' hardware observations from
-validation of their extraction.
+The source includes the library, migrated regression tests and public API. Research uses public
+vendor documentation and open-source references, including Intel IGCL, AMD ADLX/ADL, NVIDIA NVAPI,
+HandheldCompanion, ColorControl and NoVidiaApp. [Provenance](PROVENANCE.md) records attribution and
+separates existing hardware observations from validation of the extraction.
 
 ## Scope
 
@@ -24,13 +25,18 @@ The consuming application owns game detection, desired profiles, activation poli
 application-profile operations and restoration records may live in the library, with explicit
 caller-owned storage and no implicit WSGM configuration paths.
 
-## Inventory and plan
+## Documentation
 
-- [Implementation inventory](inventory/README.md): vendor control coverage, source paths and
-  extraction boundaries.
-- [Machine-readable inventory](inventory/controls.json): controls and evidence from the current WSGM
-  implementation.
-- [Extraction plan](PLAN.md): migration sequence and acceptance requirements.
+Start with the [documentation index](docs/README.md):
+
+- [Getting started](docs/getting-started.md): build, reference, detect, subscribe, start and stop.
+- [Lifetime and events](docs/lifecycle.md): cancellation, topology and driver loss.
+- [Controls and vendor support](docs/controls.md): descriptors, values and write outcomes.
+- [Application profiles](docs/profiles.md): native profiles, switched values and restoration.
+- [Display identity](docs/displays.md): physical monitors and changing Windows routes.
+- [Troubleshooting](docs/troubleshooting.md): missing controls, uncertain writes and cleanup.
+- [Complete API reference](docs/reference.md): public types, members and enum values.
+- [Contributing](CONTRIBUTING.md): native contracts, support checks and regression cases.
 
 The current Intel and NVIDIA plugins have confirmed hardware testing; AMD testing was confirmed by
 the maintainer from another repository contributor. That evidence belongs to the existing
@@ -58,10 +64,22 @@ dotnet build LibGPUDriverInteract.slnx -c Release
 ```
 
 ```csharp
+using LibGPUDriverInteract;
+
+var callerOwnedStateDirectory = Path.Combine(
+    Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+    "MyApplication", "Graphics", "Intel");
 await using var driver = GpuDriver.Create(GpuVendor.Intel, callerOwnedStateDirectory);
-driver.DescriptorsChanged += descriptors => PublishControls(descriptors);
-driver.StateChanged += state => PublishObservedValue(state);
-await driver.StartAsync(cancellationToken);
+driver.DescriptorsChanged += descriptors => Console.WriteLine(descriptors.Descriptors.Count);
+driver.StateChanged += state => Console.WriteLine(state.Quality);
+try
+{
+    var health = await driver.StartAsync();
+}
+finally
+{
+    await driver.StopAsync();
+}
 ```
 
 [API.md](API.md) describes owner admission, events, cancellation, native profile sync and safe

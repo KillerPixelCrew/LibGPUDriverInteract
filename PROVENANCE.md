@@ -27,5 +27,5 @@ The maintainer confirmed Intel and NVIDIA hardware testing and contributor AMD t
 requires compilation and application parity verification; it does not relabel an automated fixture
 as a new hardware observation.
 
-The [inventory](inventory/README.md) records all 160 existing entries, native dependencies, shared
-runtime requirements and the boundary with application profile policy.
+The public [control guide](docs/controls.md), [profile guide](docs/profiles.md) and
+[API reference](docs/reference.md) document the native controls and application boundary.

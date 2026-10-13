@@ -1,5 +1,8 @@
 # Public API
 
+See the [documentation index](docs/README.md) for integration guides and the
+[complete API reference](docs/reference.md) for every public type, member and enum value.
+
 All public types use namespace `LibGPUDriverInteract`. Native driver sessions, engines and
 publication sinks are internal.
 
