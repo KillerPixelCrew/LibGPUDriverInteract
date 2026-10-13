@@ -1,80 +1,87 @@
 # LibGPUDriverInteract
 
-A Windows-first .NET library for Intel, AMD and NVIDIA graphics driver interaction. The native
-engines, serialized runtime and profile ownership mechanisms were extracted from WSGM's vendor
-implementations. Applications consume a direct driver API without WSGM SDK dependencies.
+**A .NET library for Intel, AMD and NVIDIA graphics driver controls.**
 
-The source includes the library, migrated regression tests and public API. Research uses public
-vendor documentation and open-source references, including Intel IGCL, AMD ADLX/ADL, NVIDIA NVAPI,
-HandheldCompanion, ColorControl and NoVidiaApp. [Provenance](PROVENANCE.md) records attribution and
-separates existing hardware observations from validation of the extraction.
+[![.NET 10](https://img.shields.io/badge/.NET-10-512BD4)](src/LibGPUDriverInteract/LibGPUDriverInteract.csproj)
+[![Windows x64](https://img.shields.io/badge/Windows-x64-0078D4)](docs/getting-started.md)
+[![MIT license](https://img.shields.io/badge/License-MIT-green)](LICENSE)
 
-## Scope
+Discover the settings offered by an installed graphics driver, read their state, apply typed changes
+and manage native application profiles. One API covers all three vendors, including adapter and
+connected-display controls. Your application chooses the profiles and presents the UI.
 
-| Backend | Driver interfaces                              | Responsibilities                                                                                 |
-| ------- | ---------------------------------------------- | ------------------------------------------------------------------------------------------------ |
-| Intel   | IGCL and the documented existing registry path | Graphics features, display controls, shared-memory configuration and native application settings |
-| AMD     | ADLX and ADL                                   | Radeon graphics features, connected-display controls and supported GPU-wide settings             |
-| NVIDIA  | NVAPI and DRS                                  | Graphics settings, native application profiles, output colour, dithering and HDR output modes    |
+[Getting started](docs/getting-started.md) · [Documentation](docs/README.md) ·
+[API reference](docs/reference.md) · [Contributing](CONTRIBUTING.md)
 
-The library owns driver loading, native session lifetime, support discovery, adapters and outputs,
-supported values, read/write operations and explicit command outcomes. It loads the installed vendor
-driver's libraries; vendor binaries are not redistributed.
+## Vendor support
 
-The consuming application owns game detection, desired profiles, activation policy and UI. Native
-application-profile operations and restoration records may live in the library, with explicit
-caller-owned storage and no implicit WSGM configuration paths.
+| Vendor | Native interfaces | Supported areas                                                                                                                                                               |
+| ------ | ----------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Intel  | IGCL / ControlLib | Driver-reported 3D settings, frame pacing, filtering, sharpening, scaling, shared GPU memory, Arc Sync, display colour/power and executable profiles                          |
+| AMD    | ADLX / ADL        | Anti-Lag, Boost, sharpening, Enhanced Sync, RSR, AFMF, supported FidelityFX upgrades, FreeSync, scaling, colour, Vari-Bright and dithering                                    |
+| NVIDIA | NVAPI / DRS       | Performance and quality settings, synchronization, G-SYNC, supported DLSS overrides, frame generation, Smooth Motion, RTX HDR, Digital Vibrance, output formats and dithering |
 
-## Documentation
+Available settings and values depend on the installed driver, adapter and output. The library
+publishes supported controls with their bounds, choices, profile scope and apply timing. Use those
+descriptors when building controls; a feature listed here is not a promise for every GPU.
 
-Start with the [documentation index](docs/README.md):
+## Features
 
-- [Getting started](docs/getting-started.md): build, reference, detect, subscribe, start and stop.
-- [Lifetime and events](docs/lifecycle.md): cancellation, topology and driver loss.
-- [Controls and vendor support](docs/controls.md): descriptors, values and write outcomes.
-- [Application profiles](docs/profiles.md): native profiles, switched values and restoration.
-- [Display identity](docs/displays.md): physical monitors and changing Windows routes.
-- [Troubleshooting](docs/troubleshooting.md): missing controls, uncertain writes and cleanup.
-- [Complete API reference](docs/reference.md): public types, members and enum values.
-- [Contributing](CONTRIBUTING.md): native contracts, support checks and regression cases.
+- **Typed controls:** Boolean, integer, choice and action requests with explicit write outcomes.
+- **Multiple adapters and vendors:** one owner per vendor, with separate adapter/output identities.
+- **Application profiles:** Intel and NVIDIA native executable profiles where supported; metadata
+  for applying GPU-wide settings when the active application changes.
+- **Display identity:** physical monitor information alongside the current Windows output route.
+- **Live notifications:** descriptor, state and health updates, with explicit topology refresh.
+- **Owned cleanup:** serialized native calls and restoration that preserves unrelated driver
+  settings.
 
-The current Intel and NVIDIA plugins have confirmed hardware testing; AMD testing was confirmed by
-the maintainer from another repository contributor. That evidence belongs to the existing
-implementation. Migration into this library must preserve the behavior and its tests.
+The library loads native DLLs from the installed vendor driver. Vendor binaries are not bundled.
+Historical hardware observations and source attribution are documented in
+[PROVENANCE.md](PROVENANCE.md).
 
-## Other libraries
+## Getting started
 
-- [LibHandheld](https://github.com/KillerPixelCrew/LibHandheld) owns handheld-specific hardware,
-  including OEM power limits, fans, charging, physical input and sensors.
-- [WindowsDeviceControl](https://github.com/KillerPixelCrew/windows-device-control) owns generic
-  Windows audio, radios, display topology, modes, Windows HDR and power policy.
-
-WSGM consumes this library through its native graphics publisher and retains application profile
-policy. NVIDIA uses fresh owned profile names and removes exact legacy WSGM profiles once. Its
-common Plugin SDK remains for independent extensions such as IR and third-party integrations.
-
-## Build and use
-
-Clone with submodules so standalone builds have the pinned WindowsDeviceControl source dependency.
-Standalone and WSGM builds use this repository's same pinned nested dependency.
+Requirements: **.NET 10**, **Windows 10 build 19041 or newer**, an **x64 application**, and the
+matching installed graphics driver.
 
 ```powershell
 git clone --recurse-submodules https://github.com/KillerPixelCrew/LibGPUDriverInteract.git
+cd LibGPUDriverInteract
 dotnet build LibGPUDriverInteract.slnx -c Release
 ```
+
+The submodule supplies WindowsDeviceControl for display identity. Add a project reference to
+`src/LibGPUDriverInteract/LibGPUDriverInteract.csproj`, then subscribe before starting a vendor:
 
 ```csharp
 using LibGPUDriverInteract;
 
-var callerOwnedStateDirectory = Path.Combine(
+var vendors = GpuDriver.DetectVendors();
+if (vendors.Count == 0)
+{
+    Console.WriteLine("No supported graphics vendor detected.");
+    return;
+}
+var vendor = vendors[0];
+var stateDirectory = Path.Combine(
     Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-    "MyApplication", "Graphics", "Intel");
-await using var driver = GpuDriver.Create(GpuVendor.Intel, callerOwnedStateDirectory);
-driver.DescriptorsChanged += descriptors => Console.WriteLine(descriptors.Descriptors.Count);
-driver.StateChanged += state => Console.WriteLine(state.Quality);
+    "MyApplication", "Graphics", vendor.ToString());
+
+await using var driver = GpuDriver.Create(vendor, stateDirectory);
+driver.DescriptorsChanged += set =>
+{
+    foreach (var control in set.Descriptors)
+    {
+        Console.WriteLine($"{control.Label}: {control.CapabilityId}");
+    }
+};
+driver.StatusChanged += status => Console.WriteLine(status.Detail);
+
 try
 {
     var health = await driver.StartAsync();
+    Console.WriteLine($"{vendor}: {health}");
 }
 finally
 {
@@ -82,18 +89,35 @@ finally
 }
 ```
 
-[API.md](API.md) describes owner admission, events, cancellation, native profile sync and safe
-retirement. Notifications run on the publishing thread; marshal UI work in the application. The
-caller supplies the state directory and chooses the driver/profile policy.
+Use `ExecuteAsync` to apply a `GpuCommand` built from a current descriptor. Use
+`SyncApplicationProfilesAsync` for complete native profile sets and `RefreshTopologyAsync` after
+adapter or monitor changes. Events run on the publishing thread; marshal UI updates in your
+application. Keep an owner alive for each vendor you want to use.
 
-## Contributions
+The [getting-started guide](docs/getting-started.md) includes a write example. The
+[profile guide](docs/profiles.md) explains native profiles and GPU-wide settings.
 
-Document native API sources, supported driver behavior and the exact adapter/output identity. Keep
-capability discovery separate from user writes, preserve unedited state and external changes, and
-add regression cases for encoding, profile ownership and resource lifetime. Record hardware
-observations independently from compilation and fixtures.
+## Documentation
 
-## WSGM checkout
+| Guide                                           | Read it for                                                 |
+| ----------------------------------------------- | ----------------------------------------------------------- |
+| [Controls and vendor support](docs/controls.md) | Descriptors, values, availability and write outcomes        |
+| [Application profiles](docs/profiles.md)        | Native executable profiles, switched values and restoration |
+| [Display identity](docs/displays.md)            | Physical monitors, hotplug and changing output routes       |
+| [Lifetime and events](docs/lifecycle.md)        | Startup, cancellation, driver loss and safe cleanup         |
+| [Troubleshooting](docs/troubleshooting.md)      | Missing controls, failed sync and uncertain writes          |
+| [API reference](docs/reference.md)              | Public types, methods, properties and enum values           |
 
-WSGM tracks this repository as `external/libgpu-driver-interact`. Commit and push library changes
-first, then commit the updated gitlink in WSGM.
+## Sources and license
+
+The implementation uses **public vendor documentation and open-source references**, including Intel
+IGCL, AMD ADLX/ADL, NVIDIA NVAPI, HandheldCompanion, ColorControl and NoVidiaApp. Source attribution
+is retained in [PROVENANCE.md](PROVENANCE.md).
+
+LibGPUDriverInteract is [MIT licensed](LICENSE). Preserve its license and attribution notices when
+redistributing it. See [Contributing](CONTRIBUTING.md) to add a control or improve a backend.
+
+Used by [WSGM](https://github.com/KillerPixelCrew/WSGM). For handheld hardware, see
+[LibHandheld](https://github.com/KillerPixelCrew/LibHandheld); for generic Windows display, audio,
+radio and power controls, see
+[WindowsDeviceControl](https://github.com/KillerPixelCrew/windows-device-control).
