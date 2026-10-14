@@ -22,6 +22,14 @@ for standalone builds. WSGM reuses its existing sibling checkout of the same dep
 
 ## Validation provenance
 
+Per-output NVIDIA Adaptive Sync uses NVIDIA's public
+[`nvapi.h`](https://github.com/NVIDIA/nvapi/blob/main/nvapi.h) structures
+`NV_GET_ADAPTIVE_SYNC_DATA_V1` and `NV_SET_ADAPTIVE_SYNC_DATA_V2` (40 bytes each), with the function
+IDs `0xb73d1ee9` and `0x3eebba1d` from
+[`nvapi_interface.h`](https://github.com/NVIDIA/nvapi/blob/main/nvapi_interface.h). These controls
+have compilation and isolated output-routing regressions; their live write behavior awaits manual
+acceptance.
+
 The maintainer confirmed Intel and NVIDIA hardware testing and contributor AMD testing on
 2026-10-09. That confirmation describes the original engines. The extraction retains their tests and
 requires compilation and application parity verification; it does not relabel an automated fixture

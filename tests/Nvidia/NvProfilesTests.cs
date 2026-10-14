@@ -6,16 +6,6 @@ namespace LibGPUDriverInteract.Nvidia.Tests;
 
 public sealed class NvProfilesTests
 {
-    [Fact]
-    public void GlobalGsyncAdvertisesTheVariableRefreshRoleUsedByDisplayLayoutConsumers()
-    {
-        var control = new NvGsyncControl(new Drs(), "display");
-        Assert.Equal(GpuRole.VariableRefreshRate, control.Descriptor.Role);
-        Assert.Equal(GpuProfileScope.GlobalOnly, control.Descriptor.ProfileScope);
-        Assert.True(control.Descriptor.SupportsWrite);
-        Assert.Equal("driver", control.Descriptor.InstanceId);
-    }
-
     private const uint Setting = 0x1057eb71;
     private static readonly WriteAdmission Admitted = new(CancellationToken.None, () => true);
     private static readonly Action<string, string> Ignore = (_, _) => { };

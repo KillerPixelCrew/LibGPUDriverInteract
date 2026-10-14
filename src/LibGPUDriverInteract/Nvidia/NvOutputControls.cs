@@ -203,19 +203,25 @@ internal sealed class NvOutputModeControl(
     }
 }
 
-internal sealed class NvGsyncControl(INvProfiles api, string section)
-    : DriverControl(DriverDescriptors.Toggle("graphics.gsync", "driver", "G-SYNC enabled",
-        new Placement(section, null, 0, GpuProfileScope.GlobalOnly), GpuRole.VariableRefreshRate))
-{
-    private readonly NvDrsSetting _drs = new(api, 0x1094f157);
+internal readonly record struct NvAdaptiveSync(uint MaxFrameInterval, uint Flags);
 
+internal interface INvAdaptiveSync
+{
+    NvAdaptiveSync AdaptiveSync(uint display);
+    void SetAdaptiveSync(uint display, NvAdaptiveSync current, bool enabled, WriteAdmission admission);
+}
+
+internal sealed class NvGsyncControl(INvAdaptiveSync api, uint display, string instance, string section)
+    : DriverControl(DriverDescriptors.Toggle("display.gsync", instance, "G-SYNC enabled",
+        new Placement(section, null, 0, GpuProfileScope.GlobalOnly)))
+{
     internal override GpuValue Read()
     {
-        return GpuValue.Boolean(_drs.Read() == 1);
+        return GpuValue.Boolean((api.AdaptiveSync(display).Flags & 1u) == 0);
     }
 
     internal override void Write(GpuValue value, WriteAdmission admission)
     {
-        _drs.Write(value.BooleanValue == true ? 1u : 0u, admission);
+        api.SetAdaptiveSync(display, api.AdaptiveSync(display), value.BooleanValue == true, admission);
     }
 }

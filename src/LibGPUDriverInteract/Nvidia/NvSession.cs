@@ -96,12 +96,6 @@ internal sealed class NvSession : IDriverSession
                         _report("driver." + setting.Id.ToString("x8"), failure.Message);
                     }
 
-                    if (setting.Id == 0x1094f157 && values.Contains(0u) && values.Contains(1u))
-                    {
-                        controls.Add(new NvGsyncControl(_api, section));
-                        return;
-                    }
-
                     var control = new NvSettingControl(_api, setting, section, values);
                     // Checks the DWORD type. Display-output controls are discovered separately.
                     controls.Add(control);
@@ -174,6 +168,13 @@ internal sealed class NvSession : IDriverSession
                     var flags when (flags & 1) != 0 => "enabled",
                     _ => "off"
                 }));
+        });
+        Try(instance + "/adaptive-sync", () =>
+        {
+            if ((_api.Vrr(output.Id) & 2u) != 0)
+            {
+                controls.Add(new NvGsyncControl(_api, output.Id, instance, section));
+            }
         });
         Try(instance + "/color", () =>
         {
@@ -257,7 +258,7 @@ internal sealed class NvSession : IDriverSession
     }
 }
 
-/// <summary>One DWORD setting of the global DRS profile, shared by the choice and G-SYNC controls.</summary>
+/// <summary>One DWORD setting of the global DRS profile, used by driver-wide choice controls.</summary>
 /// <remarks>Reads and writes use the state the pass loaded (<see cref="NvSession.BeginPass" />).</remarks>
 /// <param name="api">Borrowed DRS session/profile API, used only on the driver's serialized native lane.</param>
 /// <param name="id">Driver DWORD setting identity within the global profile.</param>

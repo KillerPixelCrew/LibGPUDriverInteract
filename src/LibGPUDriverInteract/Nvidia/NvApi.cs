@@ -7,7 +7,7 @@ using WindowsDeviceControl;
 namespace LibGPUDriverInteract.Nvidia;
 
 /// <summary>Documented NVAPI DRS/color layouts; private output extensions live in NvApiPrivate.cs.</summary>
-internal sealed unsafe partial class NvApi : INvProfiles, IDisposable
+internal sealed unsafe partial class NvApi : INvProfiles, INvAdaptiveSync, IDisposable
 {
     internal const int SettingSize = 12320;
     internal const int SettingIdOffset = 4100;
@@ -474,6 +474,35 @@ internal sealed unsafe partial class NvApi : INvProfiles, IDisposable
         }
 
         return Number(data, 4);
+    }
+
+    public NvAdaptiveSync AdaptiveSync(uint display)
+    {
+        // NV_GET_ADAPTIVE_SYNC_DATA_V1, with the 64-bit timestamp aligned to eight bytes.
+        var data = new byte[40];
+        Number(data, 0, Version(data.Length, 1));
+        fixed (byte* pointer = data)
+        {
+            Check(((delegate* unmanaged[Cdecl]<uint, byte*, int>)Function(0xb73d1ee9))(display, pointer),
+                "DISP_GetAdaptiveSyncData");
+        }
+
+        return new NvAdaptiveSync(Number(data, 4), Number(data, 8));
+    }
+
+    public void SetAdaptiveSync(uint display, NvAdaptiveSync current, bool enabled, WriteAdmission admission)
+    {
+        // NV_SET_ADAPTIVE_SYNC_DATA_V2. Keep frame splitting and the configured frame interval.
+        var data = new byte[40];
+        Number(data, 0, Version(data.Length, 2));
+        Number(data, 8, (current.Flags & 2u) | (enabled ? 0u : 1u));
+        BinaryPrimitives.WriteUInt64LittleEndian(data.AsSpan(16), (ulong)current.MaxFrameInterval * 1000);
+        var function = (delegate* unmanaged[Cdecl]<uint, byte*, int>)Function(0x3eebba1d);
+        fixed (byte* pointer = data)
+        {
+            admission.Check();
+            Check(function(display, pointer), "DISP_SetAdaptiveSyncData", true);
+        }
     }
 
     internal uint HdrCapabilities(uint display)

@@ -84,7 +84,7 @@ internal static class NvSettings
             [(0x00000000, "Off"), (0x00000001, "On")]),
         new(0x1194f158, "G-SYNC Mode", "display", false, true,
             [(0x00000000, "Disabled"), (0x00000001, "Fullscreen Only"), (0x00000002, "Fullscreen and Windowed")]),
-        new(0x1094f157, "G-SYNC enabled", "display", false, true,
+        new(0x1094f157, "G-SYNC driver policy", "display", false, true,
             [(0x00000000, "Off"), (0x00000001, "On")]),
         new(0x20d690f8, "Vulkan/OpenGL Present Method", "display", true, true,
             [(0x00000000, "Prefer Native"), (0x00000001, "Prefer DXGI Swapchain"), (0x00000002, "Auto")]),

@@ -1,5 +1,12 @@
 # Display identity
 
+NVIDIA publishes `display.gsync` separately for each supported physical output, using
+[`NvAPI_DISP_GetAdaptiveSyncData` and `NvAPI_DISP_SetAdaptiveSyncData`](https://docs.nvidia.com/nvapi/group__dispcontrol.html)
+with that output's display ID. Writes preserve its frame interval and frame-splitting setting. The
+global DRS G-SYNC driver policy is separate. Output toggles use per-instance graphics persistence
+rather than a consumer's single performance-profile VRR Boolean. This write path still needs manual
+hardware acceptance; compilation does not prove the NVIDIA Control Panel checkbox changed.
+
 Physical output sections can carry GpuSection.DisplayTarget. Adapter-wide policies have no physical
 target. A driver output identifier is diagnostic metadata, not a Windows monitor route.
 
