@@ -1,5 +1,49 @@
 # Display identity
 
+## Scaled source resolutions
+
+`GpuDriver.ReadScaledResolutionsAsync`, `SetScaledResolutionAsync` and
+`RestartScaledResolutionDriverAsync` share the owner's existing serialized lane and shutdown
+admission. A catalog carries the physical display, driving adapter's PnP identity, list scope and
+support detail. A stale catalog cannot target another adapter or another vendor's lane.
+
+Intel binds optional `ctlGetSetCustomMode` and uses its output handle. The native version-0 ABI is
+`uint Size`, `byte Version`, aligned enum operation, `uint NumOfModes`, aligned source-list pointer:
+24 bytes on x64 (pointer offset 16), 20 on x86. Each source record is exactly two uints, `SourceX`
+and `SourceY`, with no timing or refresh. A count read precedes a bounded read of up to 20 records;
+add/remove uses one record and no automatic retries. See Intel's
+[official header](https://github.com/intel/drivers.gpu.control-library/blob/master/include/igcl_api.h),
+[API](https://intel.github.io/drivers.gpu.control-library/Control/api.html#ctlGetSetCustomMode) and
+[custom-mode sample](https://github.com/intel/drivers.gpu.control-library/blob/master/Samples/Custom_Mode_Samples/CustomMode_Sample_App.cpp).
+The reviewed local header snapshot is `_ref/intel-gcl/include/igcl_api.h` in WSGM, structures at
+lines 4121–4139. This ABI source is distinct from the historical hardware experiment in issue #233.
+
+AMD edits `DALNonStandardModesBCD` and numbered suffixes in the exact adapter driver key. It
+preserves partitions, other values, `DALRestrictedModesBCD` lists, unknown records, refresh/flags
+and trailing malformed bytes. NVIDIA edits `NV_Modes` `REG_MULTI_SZ`, preserving unknown groups and
+qualifiers and deleting source tokens rather than inserting dummy modes. Unsupported storage kinds
+are refused before mutation. The independent codecs implement the observed file formats; they do not
+copy GPL source. The primary format evidence is the
+[SRE 1.0 source archive](https://www.monitortests.com/download/sre/sre-1.0-src.zip), specifically
+`SRE_Gpu.cpp` list loading/value types and `SRE_Resolution.cpp`/`SRE_ResolutionList.cpp`
+serialization.
+[SRE's author](https://www.monitortests.com/forum/Thread-Scaled-Resolution-Editor-SRE) documents a
+driver restart for these registry lists. GPL-3.0-or-later SRE code is not included in this MIT
+library.
+
+Accepted Intel operations report Immediate. AMD/NVIDIA report DriverRestart; this does not mean the
+new Windows mode is already advertised. Restart is a separate explicit operation using Windows'
+[PnPUtil `/restart-device`](https://learn.microsoft.com/en-us/windows-hardware/drivers/devtest/pnputil-command-syntax#restart-device)
+for the freshly resolved PnP instance, without `/reboot`. Uncertain writes/restarts are never
+retried. List reads are preservation inputs, not mandatory readback confirmation of a successful
+setter.
+
+Source fixtures cover native ABI, BCD data preservation, NVIDIA group removal, malformed extensions
+and storage kinds. Their execution and new vendor hardware acceptance are deferred to the owning
+application's manual-first validation batch. No new hardware result is claimed here.
+
+## Physical output controls
+
 NVIDIA publishes `display.gsync` separately for each supported physical output, using
 [`NvAPI_DISP_GetAdaptiveSyncData` and `NvAPI_DISP_SetAdaptiveSyncData`](https://docs.nvidia.com/nvapi/group__dispcontrol.html)
 with that output's display ID. Writes preserve its frame interval and frame-splitting setting. The

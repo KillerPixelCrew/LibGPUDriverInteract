@@ -10,7 +10,7 @@ using LibGPUDriverInteract.Runtime;
 namespace LibGPUDriverInteract.Intel;
 
 /// <summary>Intel's native session, using the shared driver owner's lifetime and observations.</summary>
-internal sealed class IntelSession : IDriverSession
+internal sealed partial class IntelSession : IDriverSession
 {
     private readonly IReadOnlyList<AdapterClassEntry> _adapterKeys;
     private readonly IgclApi _api;

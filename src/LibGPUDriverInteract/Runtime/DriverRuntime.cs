@@ -37,7 +37,7 @@ internal abstract class DriverControl(GpuDescriptor descriptor)
 
 /// <summary>Discovery, observations and sticky written state shared by all three driver sessions.</summary>
 /// <remarks>GpuDriver owns serialization and lifetime. This class has no separate gate, loop or retirement task.</remarks>
-internal sealed class DriverRuntime(string id, Func<string, IDriverSink, IDriverSession> open)
+internal sealed partial class DriverRuntime(string id, Func<string, IDriverSink, IDriverSession> open)
 {
     private readonly Dictionary<string, GpuState> _published = [];
     private readonly Dictionary<string, WrittenValue> _written = [];
@@ -57,7 +57,7 @@ internal sealed class DriverRuntime(string id, Func<string, IDriverSink, IDriver
         _written.Clear();
         _descriptors = new GpuDescriptorSet();
         Open(token);
-        return _session is null || _model.Controls.Count == 0 ? GpuHealth.Unavailable : GpuHealth.Ready;
+        return _availability;
     }
 
     internal void RefreshTopology(CancellationToken token)
@@ -81,10 +81,7 @@ internal sealed class DriverRuntime(string id, Func<string, IDriverSink, IDriver
                 return;
             }
 
-            _sink!.ReportHealth(_model.Controls.Count == 0 ? GpuHealth.Unavailable : GpuHealth.Ready,
-                _model.Controls.Count == 0
-                    ? "The driver reported no supported GPU controls."
-                    : "Driver controls available.");
+            ReportAvailability();
         }
         catch (DriverFailure failure) when (failure.Lost)
         {
@@ -308,15 +305,13 @@ internal sealed class DriverRuntime(string id, Func<string, IDriverSink, IDriver
             _session.BeginPass();
             PublishModel(_session.Discover(), token);
             Observe(token);
-            _sink!.ReportHealth(_model.Controls.Count == 0 ? GpuHealth.Unavailable : GpuHealth.Ready,
-                _model.Controls.Count == 0
-                    ? "The driver reported no supported GPU controls."
-                    : "Driver controls available.");
         }
         catch (Exception failure) when (failure is not OperationCanceledException and not OutOfMemoryException)
         {
             Lose(failure.Message);
         }
+
+        ReportAvailability();
     }
 
     private void PublishModel(DriverModel model, CancellationToken token)

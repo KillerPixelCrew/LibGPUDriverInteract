@@ -10,7 +10,7 @@ namespace LibGPUDriverInteract;
 
 /// <summary>Owns one GPU driver's controls and native lifetime, serialized on one lane.</summary>
 /// <remarks>Events run on the publishing thread. Native writes are never retried.</remarks>
-public sealed class GpuDriver : IAsyncDisposable
+public sealed partial class GpuDriver : IAsyncDisposable
 {
     private readonly Dictionary<(string, string), string> _changes = [];
     private readonly Action<GpuLogEntry>? _diagnostics;

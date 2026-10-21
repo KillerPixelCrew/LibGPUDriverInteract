@@ -16,6 +16,8 @@ internal sealed unsafe class IgclApi : IDisposable
 {
     private nint _library;
 
+    public delegate* unmanaged[Cdecl]<nint, CtlCustomModeArgs*, int> GetSetCustomMode { get; private set; }
+
     private IgclApi(nint library)
     {
         _library = library;
@@ -143,6 +145,7 @@ internal sealed unsafe class IgclApi : IDisposable
         }
 
         Init = (delegate* unmanaged[Cdecl]<CtlInitArgs*, nint*, int>)init;
+        GetSetCustomMode = (delegate* unmanaged[Cdecl]<nint, CtlCustomModeArgs*, int>)Optional("ctlGetSetCustomMode");
         Close = (delegate* unmanaged[Cdecl]<nint, int>)close;
         EnumerateDevices = (delegate* unmanaged[Cdecl]<nint, uint*, nint*, int>)enumerateDevices;
         EnumerateDisplayOutputs = (delegate* unmanaged[Cdecl]<nint, uint*, nint*, int>)Optional(
