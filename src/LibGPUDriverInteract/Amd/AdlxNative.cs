@@ -176,10 +176,40 @@ internal static unsafe class AdlxNative
                 Interlocked.Increment(ref _epoch);
             }
 
-            throw new DriverFailure($"ADLX {operation} returned {status}.",
+            throw new DriverFailure($"ADLX {operation} returned {ResultName(status)} ({status}).",
                 attempted && status is not (4 or 6 or 12 or 14 or 17),
                 status is 7 or 11);
         }
+    }
+
+    /// <summary>The <c>ADLX_RESULT</c> name for a status, as ADLXDefines.h numbers them.</summary>
+    /// <param name="status">The returned status.</param>
+    /// <returns>The enumerator name, or <c>ADLX_RESULT</c> for a value the header does not define.</returns>
+    internal static string ResultName(int status)
+    {
+        return status switch
+        {
+            0 => "ADLX_OK",
+            1 => "ADLX_ALREADY_ENABLED",
+            2 => "ADLX_ALREADY_INITIALIZED",
+            3 => "ADLX_FAIL",
+            4 => "ADLX_INVALID_ARGS",
+            5 => "ADLX_BAD_VER",
+            6 => "ADLX_UNKNOWN_INTERFACE",
+            7 => "ADLX_TERMINATED",
+            8 => "ADLX_ADL_INIT_ERROR",
+            9 => "ADLX_NOT_FOUND",
+            10 => "ADLX_INVALID_OBJECT",
+            11 => "ADLX_ORPHAN_OBJECTS",
+            12 => "ADLX_NOT_SUPPORTED",
+            13 => "ADLX_PENDING_OPERATION",
+            14 => "ADLX_GPU_INACTIVE",
+            15 => "ADLX_GPU_IN_USE",
+            16 => "ADLX_TIMEOUT_OPERATION",
+            17 => "ADLX_NOT_ACTIVE",
+            18 => "ADLX_RESET_NEEDED",
+            _ => "ADLX_RESULT"
+        };
     }
 }
 

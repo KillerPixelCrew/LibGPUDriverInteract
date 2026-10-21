@@ -91,9 +91,13 @@ internal sealed partial class AdlxSession
         });
         if (_graphics1 is not null)
         {
-            Feature(_graphics1.Pointer, 17, "afmf", feature =>
+            var services = _graphics1;
+            Feature(services.Pointer, 17, "afmf", feature =>
             {
-                Toggle(feature, "afmf", "AMD Fluid Motion Frames", 4, 5);
+                // Every AFMF read and write takes the interface afresh from the 3D settings service, as the
+                // reference implementation does for each call, instead of holding the one found at discovery.
+                // Its options answer ADLX_NOT_ACTIVE while AFMF itself is off.
+                Toggle(feature, "afmf", "AMD Fluid Motion Frames", 4, 5, fresh: Afmf);
                 var advanced = AdlxNative.Query(feature.Pointer, "IADLX3DAMDFluidMotionFrames1");
                 if (advanced is not null)
                 {
@@ -101,16 +105,28 @@ internal sealed partial class AdlxSession
                     if (AdlxNative.Boolean(advanced.Pointer, 6))
                     {
                         Choice(advanced, "afmf-algorithm", "AFMF algorithm", 7, 8,
-                            [(0, "Auto"), (1, "Enhanced (AFMF 2.1)"), (2, "Standard")]);
+                            [(0, "Auto"), (1, "Enhanced (AFMF 2.1)"), (2, "Standard")], fresh: AfmfOptions);
                         Choice(advanced, "afmf-search-mode", "AFMF search mode", 9, 10,
-                            [(0, "Auto"), (1, "Standard"), (2, "High")]);
+                            [(0, "Auto"), (1, "Standard"), (2, "High")], fresh: AfmfOptions);
                         Choice(advanced, "afmf-performance-mode", "AFMF performance mode", 11, 12,
-                            [(0, "Auto"), (1, "Quality"), (2, "Performance")]);
+                            [(0, "Auto"), (1, "Quality"), (2, "Performance")], fresh: AfmfOptions);
                         Choice(advanced, "afmf-fast-motion", "AFMF fast motion response", 13, 14,
-                            [(0, "Repeat frames"), (1, "Blend frames")]);
+                            [(0, "Repeat frames"), (1, "Blend frames")], fresh: AfmfOptions);
                     }
                 }
             });
+
+            AdlxObject Afmf()
+            {
+                return AdlxNative.GraphicsFeature(services.Pointer, 17, gpu);
+            }
+
+            AdlxObject AfmfOptions()
+            {
+                using var afmf = Afmf();
+                return AdlxNative.Query(afmf.Pointer, "IADLX3DAMDFluidMotionFrames1")
+                       ?? throw new DriverFailure("This AMD driver no longer offers the AFMF options.");
+            }
         }
 
         if (_graphics2 is not null)
@@ -163,28 +179,32 @@ internal sealed partial class AdlxSession
         }
 
         void Toggle(AdlxObject feature, string id, string label, int read, int write, int supported = 3,
-            GpuProfileScope scope = GpuProfileScope.Switched)
+            GpuProfileScope scope = GpuProfileScope.Switched, Func<AdlxObject>? fresh = null)
         {
             controls.Add(new AdlxControl(DriverDescriptors.Toggle("graphics." + id, instance, label, section, scope),
-                () => GpuValue.Boolean(AdlxNative.Boolean(feature.Pointer, read)), (value, admission) =>
+                () => Use(feature, fresh, target => GpuValue.Boolean(AdlxNative.Boolean(target.Pointer, read))),
+                (value, admission) => Use(feature, fresh, target =>
                 {
-                    RequireSupported(feature, supported);
-                    AdlxNative.SetBoolean(feature.Pointer, write, value.BooleanValue == true, admission);
-                }));
+                    RequireSupported(target, supported);
+                    AdlxNative.SetBoolean(target.Pointer, write, value.BooleanValue == true, admission);
+                    return true;
+                })));
         }
 
         void Choice(AdlxObject feature, string id, string label, int read, int write,
-            IReadOnlyList<(int Value, string Label)> values, int supported = 3)
+            IReadOnlyList<(int Value, string Label)> values, int supported = 3, Func<AdlxObject>? fresh = null)
         {
             controls.Add(new AdlxControl(DriverDescriptors.Choice("graphics." + id, instance, label, section,
                     GpuProfileScope.Switched,
                     values.Select(value => (AmdValue.Encode(value.Value), value.Label))),
-                () => GpuValue.Choice(AmdValue.Encode(AdlxNative.Integer(feature.Pointer, read))),
-                (value, admission) =>
+                () => Use(feature, fresh,
+                    target => GpuValue.Choice(AmdValue.Encode(AdlxNative.Integer(target.Pointer, read)))),
+                (value, admission) => Use(feature, fresh, target =>
                 {
-                    RequireSupported(feature, supported);
-                    AdlxNative.SetInteger(feature.Pointer, write, AmdValue.Decode(value), admission);
-                }));
+                    RequireSupported(target, supported);
+                    AdlxNative.SetInteger(target.Pointer, write, AmdValue.Decode(value), admission);
+                    return true;
+                })));
         }
 
         void Range(AdlxObject feature, string id, string label, int range, int read, int write)
@@ -207,6 +227,23 @@ internal sealed partial class AdlxSession
                     AdlxNative.SetInteger(feature.Pointer, write, value.IntegerValue.Value, admission);
                 }));
         }
+    }
+
+    /// <summary>Runs one read or write on the discovered interface, or on a fresh one released afterwards.</summary>
+    /// <param name="discovered">The interface found at discovery.</param>
+    /// <param name="fresh">Takes the interface again for this call; null uses the discovered one.</param>
+    /// <param name="action">The read or write.</param>
+    /// <typeparam name="T">The result type.</typeparam>
+    /// <returns>The action's result.</returns>
+    internal static T Use<T>(AdlxObject discovered, Func<AdlxObject>? fresh, Func<AdlxObject, T> action)
+    {
+        if (fresh is null)
+        {
+            return action(discovered);
+        }
+
+        using var target = fresh();
+        return action(target);
     }
 
     private static void RequireSupported(AdlxObject feature, int supported = 3)

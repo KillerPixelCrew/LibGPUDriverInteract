@@ -119,6 +119,50 @@ public sealed unsafe class NativeContractTests
     }
 
     [Theory]
+    [InlineData(3, "ADLX_FAIL", true)]
+    [InlineData(17, "ADLX_NOT_ACTIVE", false)]
+    public void FailuresNameTheAdlxResult(int status, string name, bool attempted)
+    {
+        var error = Assert.Throws<DriverFailure>(() => AdlxNative.Check(status, "SetBoolean", true));
+        Assert.Equal($"ADLX SetBoolean returned {name} ({status}).", error.Message);
+        Assert.Equal(attempted, error.Attempted);
+    }
+
+    [Fact]
+    public void FreshInterfaceIsTakenForEachCallAndReleasedAfterIt()
+    {
+        using var service = new Vtable();
+        using var discovered = new AdlxObject(service.Instance);
+        _releases = 0;
+        var taken = 0;
+
+        for (var call = 0; call < 2; call++)
+        {
+            var result = AdlxSession.Use(discovered, () =>
+            {
+                taken++;
+                return AdlxNative.GraphicsFeature(service.Instance, 17, 0);
+            }, target => AdlxNative.Boolean(target.Pointer, 4));
+            Assert.True(result);
+        }
+
+        Assert.Equal(2, taken);
+        Assert.Equal(2, _releases);
+        Assert.Equal(service.Instance, discovered.Pointer);
+    }
+
+    [Fact]
+    public void WithoutAFreshSourceTheDiscoveredInterfaceIsUsedAndKept()
+    {
+        using var service = new Vtable();
+        using var discovered = new AdlxObject(service.Instance);
+        _releases = 0;
+
+        Assert.True(AdlxSession.Use(discovered, null, target => AdlxNative.Boolean(target.Pointer, 4)));
+        Assert.Equal(0, _releases);
+    }
+
+    [Theory]
     [InlineData(-180, true)]
     [InlineData(-175, true)]
     [InlineData(-179, false)]
