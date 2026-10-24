@@ -7,21 +7,15 @@ namespace LibGPUDriverInteract.Amd;
 internal sealed partial class AdlxSession
 {
     private void AddGraphics(nint gpu, string instance, string section,
-        List<AdlxObject> objects, List<DriverControl> controls)
+        List<DriverControl> controls)
     {
-        if (_graphics is null)
-        {
-            return;
-        }
-
-        var service = _graphics.Pointer;
+        string? service = null;
         Feature(service, 3, "anti-lag", feature =>
         {
             Toggle(feature, "anti-lag", "Radeon Anti-Lag", 4, 5);
-            var next = AdlxNative.Query(feature.Pointer, "IADLX3DAntiLag1");
-            if (next is not null)
+            if (feature.HasInterface("IADLX3DAntiLag1"))
             {
-                objects.Add(next);
+                var next = feature with { FeatureInterface = "IADLX3DAntiLag1" };
                 Choice(next, "anti-lag-level", "Anti-Lag level", 6, 7,
                     [(0, "Anti-Lag"), (1, "Anti-Lag Next")]);
             }
@@ -85,105 +79,94 @@ internal sealed partial class AdlxSession
                 };
             controls.Add(new AdlxControl(descriptor, GpuValue.None, (_, admission) =>
             {
-                RequireSupported(feature);
-                AdlxNative.Call(feature.Pointer, 4, admission);
+                feature.Use(target =>
+                {
+                    RequireSupported(target);
+                    AdlxNative.Call(target.Pointer, 4, admission);
+                    return true;
+                });
             }));
         });
-        if (_graphics1 is not null)
+        Feature("IADLX3DSettingsServices1", 17, "afmf", feature =>
         {
-            var services = _graphics1;
-            Feature(services.Pointer, 17, "afmf", feature =>
+            Toggle(feature, "afmf", "AMD Fluid Motion Frames", 4, 5);
+            if (feature.HasInterface("IADLX3DAMDFluidMotionFrames1"))
             {
-                // Every AFMF read and write takes the interface afresh from the 3D settings service, as the
-                // reference implementation does for each call, instead of holding the one found at discovery.
-                // Its options answer ADLX_NOT_ACTIVE while AFMF itself is off.
-                Toggle(feature, "afmf", "AMD Fluid Motion Frames", 4, 5, fresh: Afmf);
-                var advanced = AdlxNative.Query(feature.Pointer, "IADLX3DAMDFluidMotionFrames1");
-                if (advanced is not null)
+                var advanced = feature with { FeatureInterface = "IADLX3DAMDFluidMotionFrames1" };
+                if (advanced.Use(target => AdlxNative.Boolean(target.Pointer, 6)))
                 {
-                    objects.Add(advanced);
-                    if (AdlxNative.Boolean(advanced.Pointer, 6))
-                    {
-                        Choice(advanced, "afmf-algorithm", "AFMF algorithm", 7, 8,
-                            [(0, "Auto"), (1, "Enhanced (AFMF 2.1)"), (2, "Standard")], fresh: AfmfOptions);
-                        Choice(advanced, "afmf-search-mode", "AFMF search mode", 9, 10,
-                            [(0, "Auto"), (1, "Standard"), (2, "High")], fresh: AfmfOptions);
-                        Choice(advanced, "afmf-performance-mode", "AFMF performance mode", 11, 12,
-                            [(0, "Auto"), (1, "Quality"), (2, "Performance")], fresh: AfmfOptions);
-                        Choice(advanced, "afmf-fast-motion", "AFMF fast motion response", 13, 14,
-                            [(0, "Repeat frames"), (1, "Blend frames")], fresh: AfmfOptions);
-                    }
+                    Choice(advanced, "afmf-algorithm", "AFMF algorithm", 7, 8,
+                        [(0, "Auto"), (1, "Enhanced (AFMF 2.1)"), (2, "Standard")]);
+                    Choice(advanced, "afmf-search-mode", "AFMF search mode", 9, 10,
+                        [(0, "Auto"), (1, "Standard"), (2, "High")]);
+                    Choice(advanced, "afmf-performance-mode", "AFMF performance mode", 11, 12,
+                        [(0, "Auto"), (1, "Quality"), (2, "Performance")]);
+                    Choice(advanced, "afmf-fast-motion", "AFMF fast motion response", 13, 14,
+                        [(0, "Repeat frames"), (1, "Blend frames")]);
                 }
-            });
-
-            AdlxObject Afmf()
-            {
-                return AdlxNative.GraphicsFeature(services.Pointer, 17, gpu);
             }
+        });
 
-            AdlxObject AfmfOptions()
-            {
-                using var afmf = Afmf();
-                return AdlxNative.Query(afmf.Pointer, "IADLX3DAMDFluidMotionFrames1")
-                       ?? throw new DriverFailure("This AMD driver no longer offers the AFMF options.");
-            }
-        }
+        Feature("IADLX3DSettingsServices2", 18, "desktop-sharpening", feature =>
+            Toggle(feature, "desktop-sharpening", "Desktop image sharpening", 4, 5,
+                scope: GpuProfileScope.GlobalOnly));
 
-        if (_graphics2 is not null)
+        Feature("IADLX3DSettingsServices3", 19, "fsr-upgrade", feature =>
+            Toggle(feature, "fsr-upgrade", "FidelityFX upscaling upgrade", 4, 5));
+        Feature("IADLX3DSettingsServices3", 20, "fsr-framegen-upgrade", feature =>
         {
-            Feature(_graphics2.Pointer, 18, "desktop-sharpening", feature =>
-                Toggle(feature, "desktop-sharpening", "Desktop image sharpening", 4, 5,
-                    scope: GpuProfileScope.GlobalOnly));
-        }
-
-        if (_graphics3 is not null)
-        {
-            Feature(_graphics3.Pointer, 19, "fsr-upgrade", feature =>
-                Toggle(feature, "fsr-upgrade", "FidelityFX upscaling upgrade", 4, 5));
-            Feature(_graphics3.Pointer, 20, "fsr-framegen-upgrade", feature =>
+            Toggle(feature, "fsr-framegen-upgrade", "FidelityFX frame generation upgrade", 6, 7, 5);
+            var values = feature.Use(target =>
             {
-                Toggle(feature, "fsr-framegen-upgrade", "FidelityFX frame generation upgrade", 6, 7, 5);
-                using var list = AdlxNative.Interface(feature.Pointer, 3);
+                using var list = AdlxNative.Interface(target.Pointer, 3);
                 var items = AdlxNative.Items(list.Pointer);
                 try
                 {
-                    var values = items.Select(item => AdlxNative.Integer(item.Pointer, 3)).Distinct()
+                    return items.Select(item => AdlxNative.Integer(item.Pointer, 3)).Distinct()
                         .Where(ratio => ratio == 1).Select(ratio => (ratio, "2x")).ToArray();
-                    if (values.Length > 0)
-                    {
-                        Choice(feature, "fsr-framegen-ratio", "FidelityFX frame generation ratio", 4, 8,
-                            values, 5);
-                    }
                 }
                 finally
                 {
                     Release(items);
                 }
-            }, 5);
-        }
+            });
+            if (values.Length > 0)
+            {
+                Choice(feature, "fsr-framegen-ratio", "FidelityFX frame generation ratio", 4, 8,
+                    values, 5);
+            }
+        }, 5);
 
         // Chill and FRTC are deliberately absent: the consumer remains the frame-limit owner.
         return;
 
-        void Feature(nint owner, int slot, string id, Action<AdlxObject> build, int supported = 3)
+        void Feature(string? owner, int slot, string id, Action<AdlxGraphicsFeature> build, int supported = 3)
         {
             Try(instance + "/" + id, () =>
             {
-                var feature = AdlxNative.GraphicsFeature(owner, slot, gpu);
-                objects.Add(feature);
-                if (AdlxNative.Boolean(feature.Pointer, supported))
+                var feature = new AdlxGraphicsFeature(_system, gpu, slot, owner);
+                feature.TryUse(target =>
                 {
-                    build(feature);
-                }
+                    if (AdlxNative.Boolean(target.Pointer, supported))
+                    {
+                        build(feature);
+                    }
+
+                    return true;
+                }, out _);
             });
         }
 
-        void Toggle(AdlxObject feature, string id, string label, int read, int write, int supported = 3,
-            GpuProfileScope scope = GpuProfileScope.Switched, Func<AdlxObject>? fresh = null)
+        void Toggle(AdlxGraphicsFeature feature, string id, string label, int read, int write, int supported = 3,
+            GpuProfileScope scope = GpuProfileScope.Switched)
         {
             controls.Add(new AdlxControl(DriverDescriptors.Toggle("graphics." + id, instance, label, section, scope),
-                () => Use(feature, fresh, target => GpuValue.Boolean(AdlxNative.Boolean(target.Pointer, read))),
-                (value, admission) => Use(feature, fresh, target =>
+                () => feature.Use(target =>
+                {
+                    RequireSupported(target, supported);
+                    return GpuValue.Boolean(AdlxNative.Boolean(target.Pointer, read));
+                }),
+                (value, admission) => feature.Use(target =>
                 {
                     RequireSupported(target, supported);
                     AdlxNative.SetBoolean(target.Pointer, write, value.BooleanValue == true, admission);
@@ -191,15 +174,18 @@ internal sealed partial class AdlxSession
                 })));
         }
 
-        void Choice(AdlxObject feature, string id, string label, int read, int write,
-            IReadOnlyList<(int Value, string Label)> values, int supported = 3, Func<AdlxObject>? fresh = null)
+        void Choice(AdlxGraphicsFeature feature, string id, string label, int read, int write,
+            IReadOnlyList<(int Value, string Label)> values, int supported = 3)
         {
             controls.Add(new AdlxControl(DriverDescriptors.Choice("graphics." + id, instance, label, section,
                     GpuProfileScope.Switched,
                     values.Select(value => (AmdValue.Encode(value.Value), value.Label))),
-                () => Use(feature, fresh,
-                    target => GpuValue.Choice(AmdValue.Encode(AdlxNative.Integer(target.Pointer, read)))),
-                (value, admission) => Use(feature, fresh, target =>
+                () => feature.Use(target =>
+                {
+                    RequireSupported(target, supported);
+                    return GpuValue.Choice(AmdValue.Encode(AdlxNative.Integer(target.Pointer, read)));
+                }),
+                (value, admission) => feature.Use(target =>
                 {
                     RequireSupported(target, supported);
                     AdlxNative.SetInteger(target.Pointer, write, AmdValue.Decode(value), admission);
@@ -207,43 +193,32 @@ internal sealed partial class AdlxSession
                 })));
         }
 
-        void Range(AdlxObject feature, string id, string label, int range, int read, int write)
+        void Range(AdlxGraphicsFeature feature, string id, string label, int range, int read, int write)
         {
-            var bounds = AdlxNative.Range(feature.Pointer, range);
+            var bounds = feature.Use(target => AdlxNative.Range(target.Pointer, range));
             controls.Add(new AdlxControl(DriverDescriptors.Range("graphics." + id, instance, label, section,
                         GpuProfileScope.Switched, bounds.Minimum, bounds.Maximum, bounds.Step) with
                     {
                         Unit = GpuUnit.Percent
                     },
-                () => GpuValue.Integer(AdlxNative.Integer(feature.Pointer, read)), (value, admission) =>
+                () => feature.Use(target =>
                 {
-                    RequireSupported(feature);
-                    var current = AdlxNative.Range(feature.Pointer, range);
+                    RequireSupported(target);
+                    return GpuValue.Integer(AdlxNative.Integer(target.Pointer, read));
+                }),
+                (value, admission) => feature.Use(target =>
+                {
+                    RequireSupported(target);
+                    var current = AdlxNative.Range(target.Pointer, range);
                     if (!Within(value.IntegerValue!.Value, current))
                     {
                         throw new DriverFailure("This value is outside the AMD driver's current range.");
                     }
 
-                    AdlxNative.SetInteger(feature.Pointer, write, value.IntegerValue.Value, admission);
-                }));
+                    AdlxNative.SetInteger(target.Pointer, write, value.IntegerValue.Value, admission);
+                    return true;
+                })));
         }
-    }
-
-    /// <summary>Runs one read or write on the discovered interface, or on a fresh one released afterwards.</summary>
-    /// <param name="discovered">The interface found at discovery.</param>
-    /// <param name="fresh">Takes the interface again for this call; null uses the discovered one.</param>
-    /// <param name="action">The read or write.</param>
-    /// <typeparam name="T">The result type.</typeparam>
-    /// <returns>The action's result.</returns>
-    internal static T Use<T>(AdlxObject discovered, Func<AdlxObject>? fresh, Func<AdlxObject, T> action)
-    {
-        if (fresh is null)
-        {
-            return action(discovered);
-        }
-
-        using var target = fresh();
-        return action(target);
     }
 
     private static void RequireSupported(AdlxObject feature, int supported = 3)

@@ -14,6 +14,11 @@ public sealed unsafe class NativeContractTests
     private static uint _listCount;
     private static uint _firstItem;
     private static uint _lastItem;
+    private static readonly List<string> GraphicsCalls = [];
+    private static readonly Dictionary<nint, string> GraphicsNames = [];
+    private static readonly Dictionary<string, nint> GraphicsPointers = [];
+    private static int _setStatus;
+    private static int _queryStatus;
 
     [Theory]
     [InlineData(14)]
@@ -129,37 +134,168 @@ public sealed unsafe class NativeContractTests
     }
 
     [Fact]
-    public void FreshInterfaceIsTakenForEachCallAndReleasedAfterIt()
+    public void EveryGraphicsOperationResolvesAndReleasesTheWholeServiceChain()
     {
-        using var service = new Vtable();
-        using var discovered = new AdlxObject(service.Instance);
-        _releases = 0;
-        var taken = 0;
-
-        for (var call = 0; call < 2; call++)
+        var tables = GraphicsChain();
+        try
         {
-            var result = AdlxSession.Use(discovered, () =>
+            var feature = new AdlxGraphicsFeature(GraphicsPointers["system"], 0, Slot: 17,
+                ServiceInterface: "IADLX3DSettingsServices1");
+            Assert.True(feature.Use(target => AdlxNative.Boolean(target.Pointer, 4)));
+            feature.Use(target =>
             {
-                taken++;
-                return AdlxNative.GraphicsFeature(service.Instance, 17, 0);
-            }, target => AdlxNative.Boolean(target.Pointer, 4));
-            Assert.True(result);
+                AdlxNative.SetBoolean(target.Pointer, 5, value: true,
+                    new WriteAdmission(CancellationToken.None, static () => true));
+                return true;
+            });
+            Assert.Equal(new[]
+            {
+                "service", "version", "feature", "read", "release-feature", "release-version", "release-service",
+                "service", "version", "feature", "write", "release-feature", "release-version", "release-service"
+            }, GraphicsCalls);
         }
-
-        Assert.Equal(2, taken);
-        Assert.Equal(2, _releases);
-        Assert.Equal(service.Instance, discovered.Pointer);
+        finally
+        {
+            foreach (var table in tables)
+            {
+                table.Dispose();
+            }
+        }
     }
 
     [Fact]
-    public void WithoutAFreshSourceTheDiscoveredInterfaceIsUsedAndKept()
+    public void AdvancedFeatureFailureReleasesParentsAndNeverRetriesTheSetter()
     {
-        using var service = new Vtable();
-        using var discovered = new AdlxObject(service.Instance);
-        _releases = 0;
+        var tables = GraphicsChain();
+        try
+        {
+            _setStatus = 3;
+            var feature = new AdlxGraphicsFeature(GraphicsPointers["system"], 0, Slot: 17,
+                ServiceInterface: "IADLX3DSettingsServices1", FeatureInterface: "IADLX3DAMDFluidMotionFrames1");
+            Assert.Throws<DriverFailure>(() => feature.Use(target =>
+            {
+                AdlxNative.SetBoolean(target.Pointer, 5, value: true,
+                    new WriteAdmission(CancellationToken.None, static () => true));
+                return true;
+            }));
+            Assert.Equal(new[]
+            {
+                "service", "version", "feature", "advanced", "write", "release-advanced", "release-feature",
+                "release-version", "release-service"
+            }, GraphicsCalls);
+        }
+        finally
+        {
+            foreach (var table in tables)
+            {
+                table.Dispose();
+            }
+        }
+    }
 
-        Assert.True(AdlxSession.Use(discovered, null, target => AdlxNative.Boolean(target.Pointer, 4)));
-        Assert.Equal(0, _releases);
+    [Fact]
+    public void AnUnsupportedServiceIsAbsentDuringDiscoveryAndStillReleasesTheBaseService()
+    {
+        var tables = GraphicsChain();
+        try
+        {
+            _queryStatus = 12;
+            var feature = new AdlxGraphicsFeature(GraphicsPointers["system"], 0, Slot: 17,
+                ServiceInterface: "IADLX3DSettingsServices1");
+            var called = false;
+            Assert.False(feature.TryUse(_ =>
+            {
+                called = true;
+                return true;
+            }, out _));
+            Assert.False(called);
+            Assert.Equal(new[] { "service", "release-service" }, GraphicsCalls);
+        }
+        finally
+        {
+            foreach (var table in tables)
+            {
+                table.Dispose();
+            }
+        }
+    }
+
+    private static Vtable[] GraphicsChain()
+    {
+        GraphicsCalls.Clear();
+        GraphicsNames.Clear();
+        GraphicsPointers.Clear();
+        _setStatus = 0;
+        _queryStatus = 0;
+        var tables = new[] { new Vtable(), new Vtable(), new Vtable(), new Vtable(), new Vtable() };
+        var names = new[] { "system", "service", "version", "feature", "advanced" };
+        for (var index = 0; index < tables.Length; index++)
+        {
+            var table = tables[index];
+            GraphicsNames[table.Instance] = names[index];
+            GraphicsPointers[names[index]] = table.Instance;
+            table.Set(1, (nint)(delegate* unmanaged[Stdcall]<nint, int>)&ReleaseGraphics);
+            table.Set(2, (nint)(delegate* unmanaged[Stdcall]<nint, char*, nint*, int>)&QueryGraphics);
+            table.Set(4, (nint)(delegate* unmanaged[Stdcall]<nint, byte*, int>)&ReadGraphics);
+            table.Set(5, (nint)(delegate* unmanaged[Stdcall]<nint, byte, int>)&WriteGraphics);
+            table.Set(7, (nint)(delegate* unmanaged[Stdcall]<nint, nint*, int>)&GetGraphicsService);
+            table.Set(17, (nint)(delegate* unmanaged[Stdcall]<nint, nint*, int>)&GetGraphicsFeature);
+        }
+
+        return tables;
+    }
+
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvStdcall)])]
+    private static int GetGraphicsService(nint instance, nint* value)
+    {
+        GraphicsCalls.Add("service");
+        *value = GraphicsPointers["service"];
+        return 0;
+    }
+
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvStdcall)])]
+    private static int QueryGraphics(nint instance, char* name, nint* value)
+    {
+        if (_queryStatus != 0)
+        {
+            *value = 0;
+            return _queryStatus;
+        }
+
+        var next = GraphicsNames[instance] == "service" ? "version" : "advanced";
+        GraphicsCalls.Add(next);
+        *value = GraphicsPointers[next];
+        return 0;
+    }
+
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvStdcall)])]
+    private static int GetGraphicsFeature(nint instance, nint* value)
+    {
+        GraphicsCalls.Add("feature");
+        *value = GraphicsPointers["feature"];
+        return 0;
+    }
+
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvStdcall)])]
+    private static int ReadGraphics(nint instance, byte* value)
+    {
+        GraphicsCalls.Add("read");
+        *value = 1;
+        return 0;
+    }
+
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvStdcall)])]
+    private static int WriteGraphics(nint instance, byte value)
+    {
+        GraphicsCalls.Add("write");
+        return value == 1 ? _setStatus : 4;
+    }
+
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvStdcall)])]
+    private static int ReleaseGraphics(nint instance)
+    {
+        GraphicsCalls.Add("release-" + GraphicsNames[instance]);
+        return 0;
     }
 
     [Theory]
@@ -247,6 +383,8 @@ public sealed unsafe class NativeContractTests
         }
 
         internal nint Instance { get; private set; }
+
+        internal void Set(int slot, nint function) => _table[slot] = function;
 
         public void Dispose()
         {

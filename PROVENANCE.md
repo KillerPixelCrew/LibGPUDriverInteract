@@ -25,6 +25,15 @@ Vendor driver libraries are loaded from the installed driver and are not redistr
 Windows display identity and HDR operations use WindowsDeviceControl, pinned as a source dependency
 for standalone builds. WSGM reuses its existing sibling checkout of the same dependency.
 
+AMD 3D controls reacquire the system's 3D service, its required service interface and the feature
+for each operation, releasing the complete chain afterwards. This follows the ownership sequence in
+Handheld Companion's shipped `ADLX_Wrapper.dll` (SHA-256
+`7dda38f5365e4b61ab07fe788e29b9a4bbef3529b1634325d9c2997ea48dd3b8`) and AMD's native sample. The C#
+interop contract is cross-checked against the SDK headers and
+[AMD's binding guide](https://gpuopen.com/manuals/adlx/programming-with-adlx/adlx-programming-guide/quick-start/building-csharp-bindings-for-adlx/).
+The scoped-chain regressions establish acquisition, release order and no replay after a failed
+setter; they do not establish AFMF acceptance on a contributor's AMD device.
+
 ## Validation provenance
 
 Per-output NVIDIA Adaptive Sync uses NVIDIA's public

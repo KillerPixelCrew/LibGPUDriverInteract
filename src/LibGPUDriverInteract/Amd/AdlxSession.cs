@@ -12,10 +12,6 @@ internal sealed unsafe partial class AdlxSession : IDriverSession
     private readonly AdlxObject? _displays;
     private readonly AdlxObject? _displays3;
     private readonly long _epoch;
-    private readonly AdlxObject? _graphics;
-    private readonly AdlxObject? _graphics1;
-    private readonly AdlxObject? _graphics2;
-    private readonly AdlxObject? _graphics3;
     private readonly Action<string, string> _report;
     private readonly List<AdlxObject> _services = [];
     private AdlDitherApi? _dither;
@@ -60,14 +56,7 @@ internal sealed unsafe partial class AdlxSession : IDriverSession
             _epoch = AdlxNative.Epoch;
             _system = system != 0 ? system : throw new DriverFailure("ADLX supplied no system service.");
             _mapping = mapping;
-            _graphics = Service(() => AdlxNative.Interface(_system, 7), "3d");
             _displays = Service(() => AdlxNative.Interface(_system, 3), "displays");
-            if (_graphics is not null)
-            {
-                _graphics1 = Service(() => AdlxNative.Query(_graphics.Pointer, "IADLX3DSettingsServices1"), "3d1");
-                _graphics2 = Service(() => AdlxNative.Query(_graphics.Pointer, "IADLX3DSettingsServices2"), "3d2");
-                _graphics3 = Service(() => AdlxNative.Query(_graphics.Pointer, "IADLX3DSettingsServices3"), "3d3");
-            }
 
             if (_displays is not null)
             {
@@ -120,7 +109,7 @@ internal sealed unsafe partial class AdlxSession : IDriverSession
                     var instance = "pci-" + DriverIds.Hash(pnp);
                     var section = "amd." + instance;
                     var before = controls.Count;
-                    AddGraphics(gpu.Pointer, instance, section, objects, controls);
+                        AddGraphics(gpu.Pointer, instance, section, controls);
                     if (controls.Count > before)
                     {
                         sections.Add(DriverDescriptors.Section(section, AdlxNative.Text(gpu.Pointer, 7)));

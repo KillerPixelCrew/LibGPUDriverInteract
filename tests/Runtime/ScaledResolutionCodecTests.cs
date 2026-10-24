@@ -36,7 +36,8 @@ public sealed class ScaledResolutionCodecTests
         Assert.Equal(new byte[] { 0x17, 0x60, 0x11, 0x00, 0, 0, 0, 0 }, added[8..]);
         Assert.Equal(unrelated, ScaledResolutionRegistry.EditAmdBytes(added, mode, remove: true));
         byte[] malformed = [.. added, 0xff, 0x12, 0x34];
-        Assert.Equal(new byte[] { .. unrelated, 0xff, 0x12, 0x34 },
+        byte[] expected = [.. unrelated, 0xff, 0x12, 0x34];
+        Assert.Equal(expected,
             ScaledResolutionRegistry.EditAmdBytes(malformed, mode, remove: true));
         Assert.Throws<InvalidDataException>(() => ScaledResolutionRegistry.AddAmdBytes(malformed, mode));
     }
