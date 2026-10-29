@@ -56,7 +56,8 @@ public sealed partial class GpuDriver : IAsyncDisposable
         {
             GpuVendor.Intel => new DriverRuntime("intel", (directory, sink) => new IntelSession(directory, sink)),
             GpuVendor.Amd => new DriverRuntime("amd", (_, sink) => new AdlxSession((key, detail) =>
-                sink.LogChange(GpuLogLevel.Warn, "amd", key, detail))),
+                sink.LogChange(GpuLogLevel.Warn, "amd", key, detail), message =>
+                sink.Log(GpuLogLevel.Info, "amd", message))),
             GpuVendor.Nvidia => new DriverRuntime("nvidia", (directory, sink) => new NvSession(directory,
                 (key, detail) => sink.LogChange(GpuLogLevel.Warn, "nvidia", key, detail))),
             _ => throw new ArgumentOutOfRangeException(nameof(vendor))

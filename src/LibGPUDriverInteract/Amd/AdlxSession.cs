@@ -21,7 +21,7 @@ internal sealed unsafe partial class AdlxSession : IDriverSession
     private List<AdlxObject> _objects = [];
     private nint _system;
 
-    internal AdlxSession(Action<string, string> report)
+    internal AdlxSession(Action<string, string> report, Action<string>? info = null)
     {
         _report = report;
         _library = SystemLibrary.Load("amdadlx64.dll");
@@ -35,14 +35,16 @@ internal sealed unsafe partial class AdlxSession : IDriverSession
             nint system = 0;
             nint mapping = 0;
             int status;
+            string entry;
             if (NativeLibrary.TryGetExport(_library, "ADLXInitialize2", out var initialize))
             {
+                entry = "ADLXInitialize2";
                 status = ((delegate* unmanaged[Cdecl]<ulong, nint*, nint*, int>)initialize)(version, &system, &mapping);
             }
             else
             {
-                status = ((delegate* unmanaged[Cdecl]<ulong, nint*, int>)NativeLibrary.GetExport(_library,
-                        "ADLXInitialize"))
+                entry = "ADLXInitialize";
+                status = ((delegate* unmanaged[Cdecl]<ulong, nint*, int>)NativeLibrary.GetExport(_library, entry))
                     (version, &system);
             }
 
@@ -52,6 +54,9 @@ internal sealed unsafe partial class AdlxSession : IDriverSession
                 throw new DriverFailure($"ADLX initialization returned {status}.");
             }
 
+            // A pasted log then names the driver's ADLX build next to any result it returns.
+            info?.Invoke(
+                $"ADLX runtime {AdlxNative.VersionText(runtimeVersion)} initialized as {AdlxNative.VersionText(version)} via {entry}.");
             _initialized = true;
             _epoch = AdlxNative.Epoch;
             _system = system != 0 ? system : throw new DriverFailure("ADLX supplied no system service.");

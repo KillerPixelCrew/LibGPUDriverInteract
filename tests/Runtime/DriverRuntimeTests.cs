@@ -395,6 +395,95 @@ public sealed class DriverRuntimeTests
         Assert.False(DriverDescriptors.Accepts(action, GpuValue.None()));
     }
 
+    [Fact]
+    public void ASetterReportingFailureIsVerifiedWhenTheDriverSettlesOnTheRequestedValue()
+    {
+        using var directory = new TemporaryDirectory();
+        var control = new DriverTestControl { FailAfterWrite = "Fixture SetBoolean returned FAIL (3).", SettleReads = 2 };
+        var sink = new RecordingDriverSink();
+        var pauses = new List<TimeSpan>();
+        var runtime = new DriverRuntime("fixture", (_, _) => new DriverTestSession(control))
+        {
+            Pause = (delay, _) => pauses.Add(delay)
+        };
+        try
+        {
+            runtime.Start(sink, directory.Root, () => true, CancellationToken.None);
+            var result = runtime.Execute(Command(), CancellationToken.None);
+            Assert.Equal(GpuCommandOutcome.AppliedVerified, result.Outcome);
+            Assert.True(result.ReadbackValue!.BooleanValue);
+            Assert.Equal(1, control.Writes);
+            Assert.Equal(DriverRuntime.SettleDelays.Take(2), pauses);
+            Assert.Equal(GpuStateQuality.Verified, sink.States.Last().Quality);
+            Assert.True(sink.States.Last().ObservedValue!.BooleanValue);
+            Assert.Contains(sink.Logs, log => log.Contains("returned FAIL (3)") && log.Contains("readback"));
+        }
+        finally
+        {
+            runtime.Close();
+        }
+    }
+
+    [Fact]
+    public void ASetterReportingFailureStaysIndeterminateAndPublishesTheDriverValueWhenNothingSettles()
+    {
+        using var directory = new TemporaryDirectory();
+        var control = new DriverTestControl { FailAfterWrite = "Fixture SetBoolean returned FAIL (3).", IgnoreWrites = true };
+        var sink = new RecordingDriverSink();
+        var pauses = new List<TimeSpan>();
+        var runtime = new DriverRuntime("fixture", (_, _) => new DriverTestSession(control))
+        {
+            Pause = (delay, _) => pauses.Add(delay)
+        };
+        try
+        {
+            runtime.Start(sink, directory.Root, () => true, CancellationToken.None);
+            var result = runtime.Execute(Command(), CancellationToken.None);
+            Assert.Equal(GpuCommandOutcome.Indeterminate, result.Outcome);
+            Assert.Equal("Fixture SetBoolean returned FAIL (3). The driver still reports off.",
+                result.Reason!.Detail);
+            Assert.Equal(1, control.Writes);
+            Assert.Equal(DriverRuntime.SettleDelays, pauses);
+            Assert.Equal(GpuStateQuality.Observed, sink.States.Last().Quality);
+            Assert.False(sink.States.Last().ObservedValue!.BooleanValue);
+            runtime.Observe(CancellationToken.None);
+            Assert.False(sink.States.Last().ObservedValue!.BooleanValue);
+        }
+        finally
+        {
+            runtime.Close();
+        }
+    }
+
+    [Fact]
+    public void ASetterReportingFailureStopsSettlingWhenTheCallerCancels()
+    {
+        using var directory = new TemporaryDirectory();
+        using var cancellation = new CancellationTokenSource();
+        var control = new DriverTestControl { FailAfterWrite = "Fixture SetBoolean returned FAIL (3).", IgnoreWrites = true };
+        var pauses = 0;
+        var runtime = new DriverRuntime("fixture", (_, _) => new DriverTestSession(control))
+        {
+            Pause = (_, _) =>
+            {
+                pauses++;
+                cancellation.Cancel();
+            }
+        };
+        try
+        {
+            runtime.Start(new RecordingDriverSink(), directory.Root, () => true, CancellationToken.None);
+            var result = runtime.Execute(Command(), cancellation.Token);
+            Assert.Equal(GpuCommandOutcome.Indeterminate, result.Outcome);
+            Assert.Equal(1, pauses);
+            Assert.Equal(1, control.Writes);
+        }
+        finally
+        {
+            runtime.Close();
+        }
+    }
+
     private static GpuCommand Command()
     {
         return new GpuCommand

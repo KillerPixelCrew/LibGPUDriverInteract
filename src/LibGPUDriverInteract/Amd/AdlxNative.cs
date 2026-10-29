@@ -12,6 +12,12 @@ internal static unsafe class AdlxNative
     private static long _epoch;
     internal static long Epoch => Interlocked.Read(ref _epoch);
 
+    /// <summary>Formats a full version as ADLX_FULL_VERSION lays it out: major.minor.release.build.</summary>
+    internal static string VersionText(ulong version)
+    {
+        return $"{version >> 48}.{(version >> 32) & 0xFFFF}.{(version >> 16) & 0xFFFF}.{version & 0xFFFF}";
+    }
+
     internal static nint Function(nint instance, int slot)
     {
         if (instance == 0)

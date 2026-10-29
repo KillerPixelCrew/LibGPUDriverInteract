@@ -34,6 +34,18 @@ AppliedUnverified remains an accepted setter when readback is absent, fails or d
 values remain published until confirmation or a later independent change. Missing observations do
 not hide otherwise writable controls. ReadbackValue is populated only for verified outcomes.
 
+A setter that reports failure after it was dispatched is settled by readback, never by sending it
+again: the control is read immediately and then over a short settle window of about a second and a
+half. A readback matching the request is AppliedVerified, because the driver holds the value
+whatever its result code said. A readback that still differs ends Indeterminate with the driver's
+current value named in the reason and published as the observed state, so the requested value is not
+shown as applied.
+
+AMD's AFMF and RSR interfaces are service-wide: ADLX exposes them once for every GPU rather than per
+adapter. Authors of other ADLX-based tools report that both only take effect while AMD Software:
+Adrenalin Edition runs in the background. When those two setters are refused while adapter-level 3D
+settings keep working, check for its background process before suspecting the interop.
+
 GpuReason.Retryable describes whether a fresh user action might succeed; it never authorizes an
 automatic retry. Identical display writes can retrain a link, so do not apply them as support probes
 or refresh operations. Startup queries support without calling setters to test it.

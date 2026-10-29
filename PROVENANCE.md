@@ -32,7 +32,10 @@ Handheld Companion's shipped `ADLX_Wrapper.dll` (SHA-256
 interop contract is cross-checked against the SDK headers and
 [AMD's binding guide](https://gpuopen.com/manuals/adlx/programming-with-adlx/adlx-programming-guide/quick-start/building-csharp-bindings-for-adlx/).
 The scoped-chain regressions establish acquisition, release order and no replay after a failed
-setter; they do not establish AFMF acceptance on a contributor's AMD device.
+setter; they do not establish AFMF acceptance on a contributor's AMD device. The settle-by-readback
+path for a setter that reports failure after dispatch is established with runtime fixtures only; no
+AMD device has yet shown whether its AFMF setter settles or stays refused, and the ADLX version line
+logged at session open exists so the next device log says which driver build answered.
 
 ## Validation provenance
 

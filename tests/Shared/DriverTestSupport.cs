@@ -92,13 +92,32 @@ internal sealed class DriverTestControl(string id = "enabled")
     internal Action? AfterWrite { get; set; }
     internal bool IgnoreWrites { get; set; }
     internal bool RefuseWrites { get; set; }
+
+    /// <summary>A failure the setter reports after it has already run, as a driver result code would.</summary>
+    internal string? FailAfterWrite { get; set; }
+
+    /// <summary>How many reads after a write still answer the previous value before the new one settles.</summary>
+    internal int SettleReads { get; set; }
+
     internal int Reads { get; private set; }
     internal int Writes { get; private set; }
     internal bool Value { get; set; }
+    private int _settling;
+    private bool? _settled;
 
     internal override GpuValue Read()
     {
         Reads++;
+        if (_settling > 0)
+        {
+            _settling--;
+        }
+        else if (_settled is { } settled)
+        {
+            Value = settled;
+            _settled = null;
+        }
+
         return Reading?.Invoke() ?? GpuValue.Boolean(Value);
     }
 
@@ -114,10 +133,21 @@ internal sealed class DriverTestControl(string id = "enabled")
         Writes++;
         if (!IgnoreWrites)
         {
-            Value = value.BooleanValue!.Value;
+            if (SettleReads > 0)
+            {
+                _settling = SettleReads;
+                _settled = value.BooleanValue!.Value;
+            }
+            else
+            {
+                Value = value.BooleanValue!.Value;
+            }
         }
 
         AfterWrite?.Invoke();
+        if (FailAfterWrite is { } failure)
+        {
+            throw new DriverFailure(failure, true);
+        }
     }
-
 }

@@ -134,6 +134,13 @@ public sealed unsafe class NativeContractTests
     }
 
     [Fact]
+    public void FullVersionsReadAsTheHeaderNumbersThem()
+    {
+        Assert.Equal("2.0.0.125", AdlxNative.VersionText(AdlxNative.HeaderVersion));
+        Assert.Equal("1.4.0.78", AdlxNative.VersionText((1UL << 48) | (4UL << 32) | 78));
+    }
+
+    [Fact]
     public void EveryGraphicsOperationResolvesAndReleasesTheWholeServiceChain()
     {
         var tables = GraphicsChain();

@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: MIT
 
+using System.Globalization;
+
 namespace LibGPUDriverInteract.Runtime;
 
 internal sealed record DriverModel(IReadOnlyList<GpuSection> Sections, IReadOnlyList<DriverControl> Controls);
@@ -39,6 +41,17 @@ internal abstract class DriverControl(GpuDescriptor descriptor)
 /// <remarks>GpuDriver owns serialization and lifetime. This class has no separate gate, loop or retirement task.</remarks>
 internal sealed partial class DriverRuntime(string id, Func<string, IDriverSink, IDriverSession> open)
 {
+    /// <summary>
+    ///     Readback delays after a dispatched setter reports failure. A driver can answer a setter with a
+    ///     failure code and still hold the value a moment later, so its own readback decides the outcome
+    ///     within roughly a second and a half; the setter is never sent again.
+    /// </summary>
+    internal static readonly TimeSpan[] SettleDelays =
+    [
+        TimeSpan.FromMilliseconds(100), TimeSpan.FromMilliseconds(200), TimeSpan.FromMilliseconds(400),
+        TimeSpan.FromMilliseconds(800)
+    ];
+
     private readonly Dictionary<string, GpuState> _published = [];
     private readonly Dictionary<string, WrittenValue> _written = [];
     private Func<bool> _active = () => false;
@@ -47,6 +60,12 @@ internal sealed partial class DriverRuntime(string id, Func<string, IDriverSink,
     private IDriverSession? _session;
     private IDriverSink? _sink;
     private string _stateDirectory = "";
+
+    /// <summary>Waits between settle readbacks; tests replace it to run without real delays.</summary>
+    internal Action<TimeSpan, CancellationToken> Pause { get; set; } = static (delay, token) =>
+    {
+        token.WaitHandle.WaitOne(delay);
+    };
 
     internal GpuHealth Start(IDriverSink sink, string stateDirectory, Func<bool> active, CancellationToken token)
     {
@@ -197,12 +216,15 @@ internal sealed partial class DriverRuntime(string id, Func<string, IDriverSink,
             if (failure.Lost)
             {
                 Lose(failure.Message);
+                return failure.Attempted
+                    ? CommandResults.Indeterminate(command, GpuReasonCode.TransportFaulted, failure.Message)
+                    : CommandResults.Rejected(command, GpuReasonCode.DriverUnavailable, failure.Message);
             }
 
             return failure.Attempted
-                ? CommandResults.Indeterminate(command, GpuReasonCode.TransportFaulted, failure.Message)
-                : CommandResults.Rejected(command, !admission.Admitted ? GpuReasonCode.Quiescing
-                    : failure.Lost ? GpuReasonCode.DriverUnavailable : GpuReasonCode.Unsupported, failure.Message);
+                ? Settle(command, control, requested, failure.Message, token)
+                : CommandResults.Rejected(command,
+                    !admission.Admitted ? GpuReasonCode.Quiescing : GpuReasonCode.Unsupported, failure.Message);
         }
         catch (OperationCanceledException) when (token.IsCancellationRequested)
         {
@@ -211,7 +233,7 @@ internal sealed partial class DriverRuntime(string id, Func<string, IDriverSink,
         }
         catch (Exception failure) when (failure is not OutOfMemoryException)
         {
-            return CommandResults.Indeterminate(command, GpuReasonCode.TransportFaulted, failure.Message);
+            return Settle(command, control, requested, failure.Message, token);
         }
 
         GpuValue? readback = null;
@@ -246,6 +268,76 @@ internal sealed partial class DriverRuntime(string id, Func<string, IDriverSink,
         }
 
         return verified ? CommandResults.Verified(command, readback!) : CommandResults.Unverified(command, detail);
+    }
+
+    /// <summary>Resolves a setter that reported failure after dispatch by asking the driver what it holds now.</summary>
+    /// <remarks>
+    ///     The setter is never repeated. A readback that matches the request is the driver accepting the
+    ///     value despite its result code; one that still differs after the settle window is published as
+    ///     the current state so the requested value is not shown as applied.
+    /// </remarks>
+    private GpuCommandResult Settle(GpuCommand command, DriverControl control, GpuValue requested, string message,
+        CancellationToken token)
+    {
+        if (_session is not { } session || !control.Descriptor.SupportsRead)
+        {
+            return CommandResults.Indeterminate(command, GpuReasonCode.TransportFaulted, message);
+        }
+
+        GpuValue? readback;
+        for (var attempt = 0;; attempt++)
+        {
+            try
+            {
+                session.BeginPass();
+                readback = control.Read();
+            }
+            catch (Exception failure) when (failure is not OutOfMemoryException)
+            {
+                if (failure is DriverFailure { Lost: true })
+                {
+                    Lose(failure.Message);
+                }
+                else
+                {
+                    _sink!.LogChange(GpuLogLevel.Warn, id, "readback/" + control.Key, failure.Message);
+                }
+
+                return CommandResults.Indeterminate(command, GpuReasonCode.TransportFaulted, message);
+            }
+
+            if (readback == requested)
+            {
+                _written[control.Key] = new WrittenValue(requested, readback);
+                PublishValue(control, requested, null, GpuStateQuality.Verified, CancellationToken.None);
+                _sink!.LogChange(GpuLogLevel.Info, id, "settled/" + control.Key,
+                    $"{message} The driver reports the requested value on readback.");
+                return CommandResults.Verified(command, readback);
+            }
+
+            if (attempt >= SettleDelays.Length || token.IsCancellationRequested)
+            {
+                break;
+            }
+
+            Pause(SettleDelays[attempt], token);
+        }
+
+        _written.Remove(control.Key);
+        PublishValue(control, readback, null, GpuStateQuality.Observed, CancellationToken.None);
+        return CommandResults.Indeterminate(command, GpuReasonCode.TransportFaulted,
+            $"{message} The driver still reports {Describe(readback)}.");
+    }
+
+    private static string Describe(GpuValue value)
+    {
+        return value.Kind switch
+        {
+            GpuValueKind.Boolean => value.BooleanValue == true ? "on" : "off",
+            GpuValueKind.Integer => value.IntegerValue?.ToString(CultureInfo.InvariantCulture) ?? "no value",
+            GpuValueKind.Choice => value.ChoiceValue ?? "no value",
+            _ => "no value"
+        };
     }
 
     internal GpuProfileSyncResult Sync(GpuProfileSync sync, CancellationToken token)
