@@ -93,8 +93,7 @@ internal sealed partial class DriverRuntime(string id, Func<string, IDriverSink,
         _published.Clear();
         _written.Clear();
         _descriptors = new GpuDescriptorSet();
-        Open(token);
-        return _availability;
+        return Open(token);
     }
 
     internal void RefreshTopology(CancellationToken token)
@@ -393,7 +392,7 @@ internal sealed partial class DriverRuntime(string id, Func<string, IDriverSink,
             : failures);
     }
 
-    private void Open(CancellationToken token)
+    private GpuHealth Open(CancellationToken token)
     {
         token.ThrowIfCancellationRequested();
         try
@@ -403,7 +402,7 @@ internal sealed partial class DriverRuntime(string id, Func<string, IDriverSink,
             if (!_active())
             {
                 Close();
-                return;
+                return GpuHealth.Unavailable;
             }
 
             _session.Initialize(new WriteAdmission(token, _active), token);
@@ -417,7 +416,7 @@ internal sealed partial class DriverRuntime(string id, Func<string, IDriverSink,
             Lose(failure.Message);
         }
 
-        ReportAvailability();
+        return ReportAvailability();
     }
 
     private void PublishModel(DriverModel model, CancellationToken token)

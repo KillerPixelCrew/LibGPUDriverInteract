@@ -66,6 +66,18 @@ public sealed class DriverRuntimeTests
     }
 
     [Fact]
+    public void StartWhileInactiveReportsUnavailableAfterAReadyStart()
+    {
+        var session = new DriverTestSession(new DriverTestControl());
+        var runtime = new DriverRuntime("fixture", (_, _) => session);
+        Assert.Equal(GpuHealth.Ready,
+            runtime.Start(new RecordingDriverSink(), StateDirectory, () => true, CancellationToken.None));
+        runtime.Close();
+        Assert.Equal(GpuHealth.Unavailable,
+            runtime.Start(new RecordingDriverSink(), StateDirectory, () => false, CancellationToken.None));
+    }
+
+    [Fact]
     public void FailedReadKeepsWritableControlsWithoutWritingDuringTopology()
     {
         var control = new DriverTestControl();

@@ -6,8 +6,6 @@ namespace LibGPUDriverInteract.Runtime;
 
 internal sealed partial class DriverRuntime
 {
-    private GpuHealth _availability = GpuHealth.Unavailable;
-
     private GpuVendor? Vendor => id switch
     {
         "intel" => GpuVendor.Intel,
@@ -21,7 +19,6 @@ internal sealed partial class DriverRuntime
         var controls = _model.Controls.Count > 0;
         var sourceModes = !controls && HasScaledResolutionSupport();
         var health = controls || sourceModes ? GpuHealth.Ready : GpuHealth.Unavailable;
-        _availability = health;
         _sink!.ReportHealth(health, controls ? "Driver controls available." : sourceModes
             ? "GPU source-mode catalog available; native graphics controls are unavailable."
             : "The driver reported no supported GPU controls or source-mode catalog.");
