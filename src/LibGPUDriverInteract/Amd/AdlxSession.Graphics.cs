@@ -81,7 +81,6 @@ internal sealed partial class AdlxSession
             {
                 feature.Use(target =>
                 {
-                    RequireSupported(target);
                     AdlxNative.Call(target.Pointer, 4, admission);
                     return true;
                 });
@@ -112,7 +111,7 @@ internal sealed partial class AdlxSession
             Toggle(feature, "fsr-upgrade", "FidelityFX upscaling upgrade", 4, 5));
         Feature("IADLX3DSettingsServices3", 20, "fsr-framegen-upgrade", feature =>
         {
-            Toggle(feature, "fsr-framegen-upgrade", "FidelityFX frame generation upgrade", 6, 7, 5);
+            Toggle(feature, "fsr-framegen-upgrade", "FidelityFX frame generation upgrade", 6, 7);
             var values = feature.Use(target =>
             {
                 using var list = AdlxNative.Interface(target.Pointer, 3);
@@ -130,7 +129,7 @@ internal sealed partial class AdlxSession
             if (values.Length > 0)
             {
                 Choice(feature, "fsr-framegen-ratio", "FidelityFX frame generation ratio", 4, 8,
-                    values, 5);
+                    values);
             }
         }, 5);
 
@@ -154,37 +153,27 @@ internal sealed partial class AdlxSession
             });
         }
 
-        void Toggle(AdlxGraphicsFeature feature, string id, string label, int read, int write, int supported = 3,
+        void Toggle(AdlxGraphicsFeature feature, string id, string label, int read, int write,
             GpuProfileScope scope = GpuProfileScope.Switched)
         {
             controls.Add(new DelegateControl(DriverDescriptors.Toggle("graphics." + id, instance, label, section, scope),
-                () => feature.Use(target =>
-                {
-                    RequireSupported(target, supported);
-                    return GpuValue.Boolean(AdlxNative.Boolean(target.Pointer, read));
-                }),
+                () => feature.Use(target => GpuValue.Boolean(AdlxNative.Boolean(target.Pointer, read))),
                 (value, admission) => feature.Use(target =>
                 {
-                    RequireSupported(target, supported);
                     AdlxNative.SetBoolean(target.Pointer, write, value.BooleanValue == true, admission);
                     return true;
                 })));
         }
 
         void Choice(AdlxGraphicsFeature feature, string id, string label, int read, int write,
-            IReadOnlyList<(int Value, string Label)> values, int supported = 3)
+            IReadOnlyList<(int Value, string Label)> values)
         {
             controls.Add(new DelegateControl(DriverDescriptors.Choice("graphics." + id, instance, label, section,
                     GpuProfileScope.Switched,
                     values.Select(value => (AmdValue.Encode(value.Value), value.Label))),
-                () => feature.Use(target =>
-                {
-                    RequireSupported(target, supported);
-                    return GpuValue.Choice(AmdValue.Encode(AdlxNative.Integer(target.Pointer, read)));
-                }),
+                () => feature.Use(target => GpuValue.Choice(AmdValue.Encode(AdlxNative.Integer(target.Pointer, read)))),
                 (value, admission) => feature.Use(target =>
                 {
-                    RequireSupported(target, supported);
                     AdlxNative.SetInteger(target.Pointer, write, AmdValue.Decode(value), admission);
                     return true;
                 })));
@@ -198,31 +187,12 @@ internal sealed partial class AdlxSession
                     {
                         Unit = GpuUnit.Percent
                     },
-                () => feature.Use(target =>
-                {
-                    RequireSupported(target);
-                    return GpuValue.Integer(AdlxNative.Integer(target.Pointer, read));
-                }),
+                () => feature.Use(target => GpuValue.Integer(AdlxNative.Integer(target.Pointer, read))),
                 (value, admission) => feature.Use(target =>
                 {
-                    RequireSupported(target);
-                    var current = AdlxNative.Range(target.Pointer, range);
-                    if (!current.Accepts(value.IntegerValue!.Value))
-                    {
-                        throw new DriverFailure("This value is outside the AMD driver's current range.");
-                    }
-
-                    AdlxNative.SetInteger(target.Pointer, write, value.IntegerValue.Value, admission);
+                    AdlxNative.SetInteger(target.Pointer, write, value.IntegerValue!.Value, admission);
                     return true;
                 })));
-        }
-    }
-
-    private static void RequireSupported(AdlxObject feature, int supported = 3)
-    {
-        if (!AdlxNative.Boolean(feature.Pointer, supported))
-        {
-            throw new DriverFailure("This AMD feature is no longer supported on the selected target.");
         }
     }
 }

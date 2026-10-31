@@ -42,14 +42,14 @@ internal sealed unsafe partial class AdlxSession
         Feature(service, 13, "integer-scaling", feature => Toggle(feature, "integer-scaling", "Integer scaling"));
         Feature(service, 14, "color-depth", feature => Choice(feature, "color-depth", "Output bit depth", 4, 5,
             new[] { (1, "6 bpc"), (2, "8 bpc"), (3, "10 bpc"), (4, "12 bpc"), (5, "14 bpc"), (6, "16 bpc") }
-                .Where(value => AdlxNative.SupportsValue(feature.Pointer, 6, value.Item1)).ToArray(), 6));
+                .Where(value => AdlxNative.SupportsValue(feature.Pointer, 6, value.Item1)).ToArray()));
         Feature(service, 15, "pixel-format", feature => Choice(feature, "pixel-format", "Output pixel format", 4, 5,
             new[]
                 {
                     (1, "RGB 4:4:4 full"), (2, "YCbCr 4:4:4"), (3, "YCbCr 4:2:2"),
                     (4, "RGB 4:4:4 limited"), (5, "YCbCr 4:2:0")
                 }
-                .Where(value => AdlxNative.SupportsValue(feature.Pointer, 6, value.Item1)).ToArray(), 6));
+                .Where(value => AdlxNative.SupportsValue(feature.Pointer, 6, value.Item1)).ToArray()));
         Feature(service, 16, "custom-color", feature =>
         {
             foreach (var (name, label, supported, range, read, write) in ColorFields)
@@ -58,7 +58,7 @@ internal sealed unsafe partial class AdlxSession
                 {
                     if (AdlxNative.Boolean(feature.Pointer, supported))
                     {
-                        Range(feature, "color-" + name, label, supported, range, read, write);
+                        Range(feature, "color-" + name, label, range, read, write);
                     }
                 });
             }
@@ -83,7 +83,6 @@ internal sealed unsafe partial class AdlxSession
                     throw new DriverFailure("The Vari-Bright policy could not be read.");
                 }, (value, admission) =>
                 {
-                    RequireSupported(feature);
                     AdlxNative.Call(feature.Pointer, 11 + AmdValue.Decode(value), admission);
                 }));
         });
@@ -139,13 +138,12 @@ internal sealed unsafe partial class AdlxSession
             },
                 () => GpuValue.Boolean(AdlxNative.Boolean(feature.Pointer, 4)), (value, admission) =>
                 {
-                    RequireSupported(feature);
                     AdlxNative.SetBoolean(feature.Pointer, 5, value.BooleanValue == true, admission);
                 }));
         }
 
         void Choice(AdlxObject feature, string id, string label, int read, int write,
-            IReadOnlyList<(int Value, string Label)> values, int? supportedValue = null)
+            IReadOnlyList<(int Value, string Label)> values)
         {
             if (values.Count == 0)
             {
@@ -158,31 +156,18 @@ internal sealed unsafe partial class AdlxSession
                 () => GpuValue.Choice(AmdValue.Encode(AdlxNative.Integer(feature.Pointer, read))),
                 (value, admission) =>
                 {
-                    RequireSupported(feature);
-                    var requested = AmdValue.Decode(value);
-                    if (supportedValue is { } slot && !AdlxNative.SupportsValue(feature.Pointer, slot, requested))
-                    {
-                        throw new DriverFailure("This output color value is no longer supported by the AMD link.");
-                    }
-
-                    AdlxNative.SetInteger(feature.Pointer, write, requested, admission);
+                    AdlxNative.SetInteger(feature.Pointer, write, AmdValue.Decode(value), admission);
                 }));
         }
 
-        void Range(AdlxObject feature, string id, string label, int supported, int range, int read, int write)
+        void Range(AdlxObject feature, string id, string label, int range, int read, int write)
         {
             var bounds = AdlxNative.Range(feature.Pointer, range);
             controls.Add(new DelegateControl(DriverDescriptors.Range("display." + id, instance, label, section,
                     GpuProfileScope.GlobalOnly, bounds.Minimum, bounds.Maximum, bounds.Step),
                 () => GpuValue.Integer(AdlxNative.Integer(feature.Pointer, read)), (value, admission) =>
                 {
-                    RequireSupported(feature, supported);
-                    if (!AdlxNative.Range(feature.Pointer, range).Accepts(value.IntegerValue!.Value))
-                    {
-                        throw new DriverFailure("This color value is outside the current AMD range.");
-                    }
-
-                    AdlxNative.SetInteger(feature.Pointer, write, value.IntegerValue.Value, admission);
+                    AdlxNative.SetInteger(feature.Pointer, write, value.IntegerValue!.Value, admission);
                 }));
         }
     }

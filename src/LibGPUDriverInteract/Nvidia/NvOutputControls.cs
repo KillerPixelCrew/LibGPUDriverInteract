@@ -82,11 +82,6 @@ internal sealed class NvColorControl(
     internal override void Write(GpuValue value, WriteAdmission admission)
     {
         var data = field.WithValue(api.Color(output.Id, 1), NvSettingControl.Decode(value));
-        if (!api.SupportsColor(output.Id, data))
-        {
-            throw new DriverFailure("This color combination is no longer supported on the current NVIDIA link.");
-        }
-
         api.SetColor(output.Id, data, admission);
     }
 }
@@ -114,17 +109,6 @@ internal sealed class NvDitherControl(
     {
         var data = api.Dither(output.Id);
         var requested = NvSettingControl.Decode(value);
-        if (field != 0 && data.State != 1)
-        {
-            throw new DriverFailure("Enable dithering before choosing its bit depth or pattern.");
-        }
-
-        if ((field == 1 && (data.BitsCaps & (1u << (int)requested)) == 0)
-            || (field == 2 && (data.ModeCaps & (1u << (int)requested)) == 0))
-        {
-            throw new DriverFailure("This dithering option is no longer supported on the NVIDIA output.");
-        }
-
         api.SetDither(output, field switch
         {
             0 => data with { State = requested },
@@ -152,12 +136,6 @@ internal sealed class NvOutputModeControl(
     {
         var output = expected;
         var requested = NvSettingControl.Decode(value);
-        var capabilities = api.HdrCapabilities(output.Id);
-        if (requested == 2 && (capabilities & 0x80) == 0)
-        {
-            throw new DriverFailure("HDR10+ Gaming is no longer supported by this NVIDIA display.");
-        }
-
         var previous = api.OutputMode(output.Id);
         DisplayTargetIdentity? resetTarget = null;
         if (previous == 2 && requested == 1)
