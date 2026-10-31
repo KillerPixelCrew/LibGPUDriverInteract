@@ -90,19 +90,17 @@ public sealed class ThreeDFeatureTests
     }
 
     [Fact]
-    public void AGameProfileWritesItsTierTypeAndTheEnabledTier()
+    public void AGameProfileEncodesTheEnabledTier()
     {
         var feature = AppProfile(ThreeDFeatureCatalog.TierTypePerformance, (1u << 0) | (1u << 1));
         var control = Assert.Single(ThreeDFeatureControl.Build(feature, Adapter, Placement, DriverLog.None));
         RawFeatureValue current = default;
-        current.AppProfile.TierType = ThreeDFeatureCatalog.TierTypeCompatibility;
 
         var raw = control.Encode(current, GpuValue.Choice("tier-2"));
 
         Assert.Equal("graphics.performance-profile", control.CapabilityId);
         Assert.Equal(GpuProfileScope.NativePerApplication, control.Descriptor.ProfileScope);
-        Assert.Equal((ThreeDFeatureCatalog.TierTypePerformance, 2u),
-            (raw.AppProfile.TierType, raw.AppProfile.EnabledTierProfiles));
+        Assert.Equal(2u, raw.AppProfile.EnabledTierProfiles);
         Assert.Equal("tier-2", control.Decode(raw)!.ChoiceValue);
     }
 

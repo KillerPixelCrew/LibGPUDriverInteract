@@ -13,9 +13,9 @@ internal sealed partial class AdlxSession
         Feature(service, 3, "anti-lag", feature =>
         {
             Toggle(feature, "anti-lag", "Radeon Anti-Lag", 4, 5);
-            if (feature.HasInterface("IADLX3DAntiLag1"))
+            var next = feature with { FeatureInterface = "IADLX3DAntiLag1" };
+            if (next.TryUse(_ => true, out _))
             {
-                var next = feature with { FeatureInterface = "IADLX3DAntiLag1" };
                 Choice(next, "anti-lag-level", "Anti-Lag level", 6, 7,
                     [(0, "Anti-Lag"), (1, "Anti-Lag Next")]);
             }
@@ -77,7 +77,7 @@ internal sealed partial class AdlxSession
                     Role = GpuRole.Action, ValueKind = GpuValueKind.None, SupportsRead = false,
                     SupportsWrite = false, Persistence = GpuPersistence.Volatile
                 };
-            controls.Add(new AdlxControl(descriptor, GpuValue.None, (_, admission) =>
+            controls.Add(new DelegateControl(descriptor, GpuValue.None, (_, admission) =>
             {
                 feature.Use(target =>
                 {
@@ -90,20 +90,17 @@ internal sealed partial class AdlxSession
         Feature("IADLX3DSettingsServices1", 17, "afmf", feature =>
         {
             Toggle(feature, "afmf", "AMD Fluid Motion Frames", 4, 5);
-            if (feature.HasInterface("IADLX3DAMDFluidMotionFrames1"))
+            var advanced = feature with { FeatureInterface = "IADLX3DAMDFluidMotionFrames1" };
+            if (advanced.TryUse(target => AdlxNative.Boolean(target.Pointer, 6), out var supported) && supported)
             {
-                var advanced = feature with { FeatureInterface = "IADLX3DAMDFluidMotionFrames1" };
-                if (advanced.Use(target => AdlxNative.Boolean(target.Pointer, 6)))
-                {
-                    Choice(advanced, "afmf-algorithm", "AFMF algorithm", 7, 8,
-                        [(0, "Auto"), (1, "Enhanced (AFMF 2.1)"), (2, "Standard")]);
-                    Choice(advanced, "afmf-search-mode", "AFMF search mode", 9, 10,
-                        [(0, "Auto"), (1, "Standard"), (2, "High")]);
-                    Choice(advanced, "afmf-performance-mode", "AFMF performance mode", 11, 12,
-                        [(0, "Auto"), (1, "Quality"), (2, "Performance")]);
-                    Choice(advanced, "afmf-fast-motion", "AFMF fast motion response", 13, 14,
-                        [(0, "Repeat frames"), (1, "Blend frames")]);
-                }
+                Choice(advanced, "afmf-algorithm", "AFMF algorithm", 7, 8,
+                    [(0, "Auto"), (1, "Enhanced (AFMF 2.1)"), (2, "Standard")]);
+                Choice(advanced, "afmf-search-mode", "AFMF search mode", 9, 10,
+                    [(0, "Auto"), (1, "Standard"), (2, "High")]);
+                Choice(advanced, "afmf-performance-mode", "AFMF performance mode", 11, 12,
+                    [(0, "Auto"), (1, "Quality"), (2, "Performance")]);
+                Choice(advanced, "afmf-fast-motion", "AFMF fast motion response", 13, 14,
+                    [(0, "Repeat frames"), (1, "Blend frames")]);
             }
         });
 
@@ -160,7 +157,7 @@ internal sealed partial class AdlxSession
         void Toggle(AdlxGraphicsFeature feature, string id, string label, int read, int write, int supported = 3,
             GpuProfileScope scope = GpuProfileScope.Switched)
         {
-            controls.Add(new AdlxControl(DriverDescriptors.Toggle("graphics." + id, instance, label, section, scope),
+            controls.Add(new DelegateControl(DriverDescriptors.Toggle("graphics." + id, instance, label, section, scope),
                 () => feature.Use(target =>
                 {
                     RequireSupported(target, supported);
@@ -177,7 +174,7 @@ internal sealed partial class AdlxSession
         void Choice(AdlxGraphicsFeature feature, string id, string label, int read, int write,
             IReadOnlyList<(int Value, string Label)> values, int supported = 3)
         {
-            controls.Add(new AdlxControl(DriverDescriptors.Choice("graphics." + id, instance, label, section,
+            controls.Add(new DelegateControl(DriverDescriptors.Choice("graphics." + id, instance, label, section,
                     GpuProfileScope.Switched,
                     values.Select(value => (AmdValue.Encode(value.Value), value.Label))),
                 () => feature.Use(target =>
@@ -196,7 +193,7 @@ internal sealed partial class AdlxSession
         void Range(AdlxGraphicsFeature feature, string id, string label, int range, int read, int write)
         {
             var bounds = feature.Use(target => AdlxNative.Range(target.Pointer, range));
-            controls.Add(new AdlxControl(DriverDescriptors.Range("graphics." + id, instance, label, section,
+            controls.Add(new DelegateControl(DriverDescriptors.Range("graphics." + id, instance, label, section,
                         GpuProfileScope.Switched, bounds.Minimum, bounds.Maximum, bounds.Step) with
                     {
                         Unit = GpuUnit.Percent
@@ -210,7 +207,7 @@ internal sealed partial class AdlxSession
                 {
                     RequireSupported(target);
                     var current = AdlxNative.Range(target.Pointer, range);
-                    if (!Within(value.IntegerValue!.Value, current))
+                    if (!current.Accepts(value.IntegerValue!.Value))
                     {
                         throw new DriverFailure("This value is outside the AMD driver's current range.");
                     }
@@ -227,11 +224,5 @@ internal sealed partial class AdlxSession
         {
             throw new DriverFailure("This AMD feature is no longer supported on the selected target.");
         }
-    }
-
-    internal static bool Within(int value, AdlxRange range)
-    {
-        return value >= range.Minimum && value <= range.Maximum
-                                      && ((long)value - range.Minimum) % range.Step == 0;
     }
 }

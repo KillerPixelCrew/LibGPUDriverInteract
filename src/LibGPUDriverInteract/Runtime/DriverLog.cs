@@ -27,9 +27,20 @@ internal static class DriverLog
         sink.Error(scope, context + ": " + Describe(error));
     }
 
-    internal static void Change(this IDriverSink sink, GpuLogLevel level, string scope, string key, string message)
+    /// <summary>Runs one discovery step, reporting a failure and continuing unless the driver was lost.</summary>
+    /// <param name="report">Receives the step key and the failure message.</param>
+    /// <param name="key">The step.</param>
+    /// <param name="action">The step's work.</param>
+    internal static void Try(Action<string, string> report, string key, Action action)
     {
-        sink.LogChange(level, scope, key, message);
+        try
+        {
+            action();
+        }
+        catch (Exception error) when (error is not DriverFailure { Lost: true })
+        {
+            report(key, error.Message);
+        }
     }
 
     internal static string Describe(Exception error)
@@ -39,14 +50,12 @@ internal static class DriverLog
 
     private sealed class NullSink : IDriverSink
     {
-        public ValueTask PublishDescriptorsAsync(GpuDescriptorSet descriptors, CancellationToken cancellationToken)
+        public void PublishDescriptors(GpuDescriptorSet descriptors)
         {
-            return ValueTask.CompletedTask;
         }
 
-        public ValueTask PublishCapabilityStateAsync(GpuState state, CancellationToken cancellationToken)
+        public void PublishCapabilityState(GpuState state)
         {
-            return ValueTask.CompletedTask;
         }
 
         public void ReportHealth(GpuHealth health, string detail)

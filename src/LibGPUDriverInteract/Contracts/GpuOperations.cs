@@ -5,6 +5,9 @@ namespace LibGPUDriverInteract;
 /// <summary>A typed driver setting value.</summary>
 public sealed record GpuValue
 {
+    private static readonly GpuValue True = new() { Kind = GpuValueKind.Boolean, BooleanValue = true };
+    private static readonly GpuValue False = new() { Kind = GpuValueKind.Boolean, BooleanValue = false };
+
     /// <summary>The field carrying this value.</summary>
     public required GpuValueKind Kind { get; init; }
 
@@ -24,12 +27,12 @@ public sealed record GpuValue
         return new GpuValue { Kind = GpuValueKind.None };
     }
 
-    /// <summary>Creates a Boolean value.</summary>
+    /// <summary>Creates a Boolean value; both values are shared, so a read allocates nothing.</summary>
     /// <param name="value">The payload.</param>
     /// <returns>The typed value.</returns>
     public static GpuValue Boolean(bool value)
     {
-        return new GpuValue { Kind = GpuValueKind.Boolean, BooleanValue = value };
+        return value ? True : False;
     }
 
     /// <summary>Creates an integer value.</summary>

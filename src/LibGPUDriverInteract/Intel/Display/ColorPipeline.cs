@@ -1,3 +1,4 @@
+using System.Runtime.InteropServices;
 using LibGPUDriverInteract.Intel.Controls;
 using LibGPUDriverInteract.Intel.Igcl;
 using LibGPUDriverInteract.Runtime;
@@ -167,7 +168,6 @@ internal sealed unsafe class ColorPipeline
     private const uint FeatureHdr = 1 << 5;
     private const int MatrixSize = 9;
 
-    private static readonly double[] IdentityMatrix = [1, 0, 0, 0, 1, 0, 0, 0, 1];
     private readonly double[] _coefficients = new double[MatrixSize];
 
     private readonly string _curveKey;
@@ -201,14 +201,24 @@ internal sealed unsafe class ColorPipeline
         _session = session;
         _output = output;
         _display = display;
-        _lutBlock = lutBlock;
-        _matrixBlock = matrixBlock;
         _store = store;
         _log = log;
         _curveKey = $"{display}.curve";
         _matrixKey = $"{display}.matrix";
         var perChannel = (int)lutBlock.Config.OneDLut.SamplesPerChannel;
-        _samples = new double[perChannel * lutBlock.Config.OneDLut.Channels];
+
+        // Pinned for the pipeline's lifetime, so every query and write hands the driver the same buffer.
+        _samples = GC.AllocateArray<double>(perChannel * (int)lutBlock.Config.OneDLut.Channels, pinned: true);
+        lutBlock.Size = (uint)sizeof(CtlPixTxBlockConfig);
+        lutBlock.Config.OneDLut.SampleValues = Marshal.UnsafeAddrOfPinnedArrayElement(_samples, 0);
+        lutBlock.Config.OneDLut.SamplePositions = 0;
+        _lutBlock = lutBlock;
+        if (matrixBlock is { } matrixConfig)
+        {
+            matrixConfig.Size = (uint)sizeof(CtlPixTxBlockConfig);
+            _matrixBlock = matrixConfig;
+        }
+
         _neutralCurve = new double[perChannel];
         _recordedCurve = new double[perChannel];
         ColorMath.FillCurve(ColorSettings.Neutral, _neutralCurve);
@@ -216,48 +226,6 @@ internal sealed unsafe class ColorPipeline
 
     /// <summary>Whether hue and saturation can be offered.</summary>
     public bool HasMatrix => _matrixBlock is not null;
-
-    /// <summary>The support key of the LUT or the matrix: the plugin probes each block once.</summary>
-    /// <param name="matrix">True for the matrix block; false for the one-dimensional LUT.</param>
-    /// <returns>A display-qualified key shared by every control that probes the same native block.</returns>
-    public string SupportKey(bool matrix)
-    {
-        return matrix ? _matrixKey : _curveKey;
-    }
-
-    /// <summary>Probes a block setter with its raw current LUT or matrix, without rebuilding it.</summary>
-    /// <param name="matrix">Whether to probe the matrix rather than the LUT; true requires HasMatrix.</param>
-    /// <param name="admission">Rechecked after the query and before the setter.</param>
-    /// <remarks>A block the driver holds nothing for is its neutral default; nothing is written for it.</remarks>
-    /// <returns>The exact-block read/write outcome; a missing stored block succeeds without creating an override.</returns>
-    public ControlWrite ProbeSupport(bool matrix, WriteAdmission admission)
-    {
-        var block = matrix ? _matrixBlock!.Value : _lutBlock;
-        block.Size = (uint)sizeof(CtlPixTxBlockConfig);
-        int result;
-        fixed (double* samples = _samples)
-        {
-            if (!matrix)
-            {
-                block.Config.OneDLut.SampleValues = (nint)samples;
-                block.Config.OneDLut.SamplePositions = 0;
-            }
-
-            result = Query(&block);
-            if (result == IgclResult.DataNotFound)
-            {
-                return new ControlWrite(WriteStatus.Applied,
-                    Detail: "no stored block; the driver's neutral default is retained");
-            }
-
-            if (result == IgclResult.Success)
-            {
-                result = Apply(&block, admission, 0);
-            }
-        }
-
-        return ControlWrite.From(result, "colour pipe support discovery");
-    }
 
     /// <summary>Queries the pipe and builds the pipeline when an SDR 1D LUT is available.</summary>
     /// <param name="session">The session.</param>
@@ -418,7 +386,7 @@ internal sealed unsafe class ColorPipeline
                 : stored is { } record && ColorMath.Matches(_recordedCurve, channel)
                     ? record
                     : null;
-            _log.Change(GpuLogLevel.Info, "color", _curveKey, _curve is null
+            _log.LogChange(GpuLogLevel.Info, "color", _curveKey, _curve is null
                 ? "The display holds a tone curve the consumer did not write; brightness, contrast and gamma are unknown."
                 : "The display's tone curve is the identity or the consumer's own.");
         }
@@ -435,12 +403,12 @@ internal sealed unsafe class ColorPipeline
         var matrixResult = ReadMatrix();
         if (matrixResult == IgclResult.Success)
         {
-            _matrix = ColorMath.Matches(IdentityMatrix, _coefficients)
+            _matrix = ColorMath.Matches(ColorMath.IdentityMatrix, _coefficients)
                 ? neutral
                 : stored is { } record && ColorMath.Matches(_recordedMatrix, _coefficients)
                     ? record
                     : null;
-            _log.Change(GpuLogLevel.Info, "color", _matrixKey, _matrix is null
+            _log.LogChange(GpuLogLevel.Info, "color", _matrixKey, _matrix is null
                 ? "The display holds a colour matrix the consumer did not write; hue and saturation are unknown."
                 : "The display's colour matrix is the identity or the consumer's own.");
         }
@@ -467,31 +435,24 @@ internal sealed unsafe class ColorPipeline
     private int ReadCurve()
     {
         var block = _lutBlock;
-        block.Size = (uint)sizeof(CtlPixTxBlockConfig);
-        fixed (double* values = _samples)
+        var result = Query(&block);
+        if (result != IgclResult.DataNotFound)
         {
-            block.Config.OneDLut.SampleValues = (nint)values;
-            block.Config.OneDLut.SamplePositions = 0;
-            var result = Query(&block);
-            if (result != IgclResult.DataNotFound)
-            {
-                return result;
-            }
-
-            // Nothing set yet is the driver's own curve, which is the neutral one.
-            _neutralCurve.CopyTo(_samples, 0);
-            return IgclResult.Success;
+            return result;
         }
+
+        // Nothing set yet is the driver's own curve, which is the neutral one.
+        _neutralCurve.CopyTo(_samples, 0);
+        return IgclResult.Success;
     }
 
     private int ReadMatrix()
     {
         var block = _matrixBlock!.Value;
-        block.Size = (uint)sizeof(CtlPixTxBlockConfig);
         var result = Query(&block);
         if (result == IgclResult.DataNotFound)
         {
-            IdentityMatrix.CopyTo(_coefficients, 0);
+            ColorMath.IdentityMatrix.CopyTo(_coefficients);
             return IgclResult.Success;
         }
 
@@ -527,20 +488,12 @@ internal sealed unsafe class ColorPipeline
         }
 
         var block = _lutBlock;
-        block.Size = (uint)sizeof(CtlPixTxBlockConfig);
-        fixed (double* values = _samples)
-        {
-            block.Config.OneDLut.SampleValues = (nint)values;
-            block.Config.OneDLut.SamplePositions = 0;
-            block.Config.OneDLut.SamplingType = SamplingUniform;
-            return Apply(&block, admission);
-        }
+        return Apply(&block, admission);
     }
 
     private int WriteMatrix(ColorSettings settings, WriteAdmission admission)
     {
         var block = _matrixBlock!.Value;
-        block.Size = (uint)sizeof(CtlPixTxBlockConfig);
         var coefficients = ColorMath.HueSaturationMatrix(settings);
         for (var index = 0; index < 3; index++)
         {
@@ -556,11 +509,11 @@ internal sealed unsafe class ColorPipeline
         return Apply(&block, admission);
     }
 
-    private int Apply(CtlPixTxBlockConfig* block, WriteAdmission admission, uint flags = FlagPersist)
+    private int Apply(CtlPixTxBlockConfig* block, WriteAdmission admission)
     {
         CtlPixTxPipeSetConfig request = default;
         request.OperationType = OperationSetCustom;
-        request.Flags = flags;
+        request.Flags = FlagPersist;
         request.NumBlocks = 1;
         request.BlockConfigs = (nint)block;
         admission.Check();
@@ -579,16 +532,6 @@ internal sealed class ColorControl : IntelControl
     {
         _pipeline = pipeline;
         _field = field;
-        SupportKey = pipeline.SupportKey(field.InMatrix);
-    }
-
-    /// <inheritdoc />
-    public override string SupportKey { get; }
-
-    /// <inheritdoc />
-    public override ControlWrite ProbeSupport(WriteAdmission admission)
-    {
-        return _pipeline.ProbeSupport(_field.InMatrix, admission);
     }
 
     /// <summary>Builds the colour controls of one display.</summary>

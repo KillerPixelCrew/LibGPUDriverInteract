@@ -56,18 +56,9 @@ internal sealed class IntelModel
     /// <summary>The declared sections.</summary>
     public IReadOnlyList<GpuSection> Sections { get; }
 
-    /// <summary>The routing key of one capability instance.</summary>
-    /// <param name="capabilityId">The capability id.</param>
-    /// <param name="instanceId">The instance id.</param>
-    /// <returns>The key.</returns>
-    public static string Key(string capabilityId, string? instanceId)
-    {
-        return DriverIds.Key(capabilityId, instanceId);
-    }
-
     public INativeProfileTarget? FindTarget(string capabilityId, string? instanceId)
     {
-        return _targets.GetValueOrDefault(Key(capabilityId, instanceId));
+        return _targets.GetValueOrDefault(DriverIds.Key(capabilityId, instanceId));
     }
 
     /// <summary>Builds the model for an open session.</summary>
@@ -98,21 +89,14 @@ internal sealed class IntelModel
             var sectionId = several ? $"graphics-{adapter.Index}" : "graphics";
             var title = several ? DriverDescriptors.Label(adapter.Name, "Graphics") : "Graphics";
             List<IntelControl> built = [];
-            Dictionary<string, INativeProfileTarget> builtTargets = new(StringComparer.Ordinal);
-            BuildAdapter(session, adapter, instance, sectionId, adapterKeys, built, builtTargets, log);
+            BuildAdapter(session, adapter, instance, sectionId, adapterKeys, built, targets, log);
             if (ReferenceEquals(adapter, memoryAdapter))
             {
                 built.Add(new SharedMemoryControl(memory, instance, new Placement(sectionId, SystemCategory, 900)));
             }
 
-            if (Section(sectionId, title, "Intel graphics driver settings", GpuSectionKind.Adapter, AdapterCategories,
-                    built, controls, sections))
-            {
-                foreach (var (key, target) in builtTargets)
-                {
-                    targets[key] = target;
-                }
-            }
+            Section(sectionId, title, "Intel graphics driver settings", GpuSectionKind.Adapter, AdapterCategories,
+                built, controls, sections);
         }
 
         var semanticVrrTaken = false;
@@ -120,7 +104,9 @@ internal sealed class IntelModel
 
         // The built-in panel first, so the variable refresh role goes to it when it has variable refresh and
         // its section gets the lowest sort order among the displays.
-        var topology = session.Outputs.Count == 0 ? null : DisplayIdentityResolver.Capture(log);
+        var topology = session.Outputs.Count == 0
+            ? new DriverDisplayTargets([], [])
+            : DisplayIdentityResolver.Capture(log);
         var ordered = session.Outputs
             .Select(output => (Output: output, Identity: DisplayIdentityResolver.Resolve(output, log, topology)))
             .OrderByDescending(entry => entry.Identity.Internal)
@@ -134,14 +120,10 @@ internal sealed class IntelModel
             }
 
             var sectionId = $"display-{ValueMapping.Fingerprint(identity.InstanceId)}";
-            var vrrTaken = semanticVrrTaken;
             List<IntelControl> built = [];
-            BuildDisplay(session, output, identity, sectionId, ref vrrTaken, colors, built, log);
-            if (Section(sectionId, name, "Intel display settings", GpuSectionKind.Display, DisplayCategories, built,
-                    controls, sections, identity.Target))
-            {
-                semanticVrrTaken = vrrTaken;
-            }
+            BuildDisplay(session, output, identity, sectionId, ref semanticVrrTaken, colors, built, log);
+            Section(sectionId, name, "Intel display settings", GpuSectionKind.Display, DisplayCategories, built,
+                controls, sections, identity.Target);
         }
 
         return new IntelModel(controls, sections, targets);
@@ -162,8 +144,7 @@ internal sealed class IntelModel
     }
 
     /// <summary>Adds a section and its controls when it has any.</summary>
-    /// <returns><see langword="true" /> when the section was added.</returns>
-    private static bool Section(
+    private static void Section(
         string sectionId,
         string title,
         string description,
@@ -176,7 +157,7 @@ internal sealed class IntelModel
     {
         if (built.Count == 0)
         {
-            return false;
+            return;
         }
 
         controls.AddRange(built);
@@ -190,7 +171,6 @@ internal sealed class IntelModel
             Categories = categories,
             DisplayTarget = displayTarget
         });
-        return true;
     }
 
     private static IgclAdapter? MemoryAdapter(IReadOnlyList<IgclAdapter> adapters, IntelGraphicsMemoryTransport memory)

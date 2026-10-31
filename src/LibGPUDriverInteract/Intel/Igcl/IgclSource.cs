@@ -57,12 +57,10 @@ internal sealed unsafe class IgclSource<T>
 {
     private readonly delegate* unmanaged[Cdecl]<nint, T*, int> _get;
     private readonly nint _handle;
-    private readonly Func<T, T>? _prepareProbe;
     private readonly T _request;
     private readonly IgclSession _session;
     private readonly delegate* unmanaged[Cdecl]<nint, T*, int> _set;
     private PassCache<T> _cache;
-    private string? _supportKey;
 
     /// <summary>Binds a structure to its calls.</summary>
     /// <param name="session">The session.</param>
@@ -70,48 +68,18 @@ internal sealed unsafe class IgclSource<T>
     /// <param name="get">The get call.</param>
     /// <param name="set">The set call; the get call again for a get/set entry point.</param>
     /// <param name="request">What a get sends: version, operation and buffers, whatever the call needs.</param>
-    /// <param name="prepareProbe">Changes only get/set operation selectors while retaining native state.</param>
     public IgclSource(
         IgclSession session,
         nint handle,
         delegate* unmanaged[Cdecl]<nint, T*, int> get,
         delegate* unmanaged[Cdecl]<nint, T*, int> set,
-        T request,
-        Func<T, T>? prepareProbe = null)
+        T request)
     {
         _session = session;
         _handle = handle;
         _get = get;
         _set = set;
         _request = request;
-        _prepareProbe = prepareProbe;
-    }
-
-    /// <summary>
-    ///     The structure's support key: the key of the first control built on it, stable across rebuilds.
-    /// </summary>
-    /// <param name="key">The key of a control built on it.</param>
-    /// <returns>The key every control of the structure shares.</returns>
-    public string Claim(string key)
-    {
-        return _supportKey ??= key;
-    }
-
-    /// <summary>Reads and writes the same native settings; only get/set operation selectors change.</summary>
-    /// <param name="admission">
-    ///     Caller cancellation, deadline and live-session admission, checked immediately before any
-    ///     setter.
-    /// </param>
-    /// <returns>The structure read/write outcome; the optional probe preparation changes only required operation selectors.</returns>
-    public ControlWrite ProbeSupport(WriteAdmission admission)
-    {
-        var result = Read(out var current);
-        if (result == IgclResult.Success)
-        {
-            result = Write(_prepareProbe is null ? current : _prepareProbe(current), admission);
-        }
-
-        return ControlWrite.From(result, "support discovery");
     }
 
     /// <summary>Reads the structure, once per pass.</summary>

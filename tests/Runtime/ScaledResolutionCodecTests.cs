@@ -34,11 +34,11 @@ public sealed class ScaledResolutionCodecTests
         byte[] unrelated = [0x19, 0x20, 0x10, 0x80, 0, 0, 0x00, 0x60];
         var added = ScaledResolutionRegistry.AddAmdBytes(unrelated, mode);
         Assert.Equal(new byte[] { 0x17, 0x60, 0x11, 0x00, 0, 0, 0, 0 }, added[8..]);
-        Assert.Equal(unrelated, ScaledResolutionRegistry.EditAmdBytes(added, mode, remove: true));
+        Assert.Equal(unrelated, ScaledResolutionRegistry.RemoveAmdBytes(added, mode));
         byte[] malformed = [.. added, 0xff, 0x12, 0x34];
         byte[] expected = [.. unrelated, 0xff, 0x12, 0x34];
         Assert.Equal(expected,
-            ScaledResolutionRegistry.EditAmdBytes(malformed, mode, remove: true));
+            ScaledResolutionRegistry.RemoveAmdBytes(malformed, mode));
         Assert.Throws<InvalidDataException>(() => ScaledResolutionRegistry.AddAmdBytes(malformed, mode));
     }
 
@@ -47,7 +47,7 @@ public sealed class ScaledResolutionCodecTests
     {
         var mode = new GpuScaledResolution(1760, 1100);
         byte[] bytes = [0x17, 0x60, 0x11, 0x00, 1, 0, 0, 60];
-        Assert.Equal(bytes, ScaledResolutionRegistry.EditAmdBytes(bytes, mode, remove: true));
+        Assert.Equal(bytes, ScaledResolutionRegistry.RemoveAmdBytes(bytes, mode));
     }
 
     [Fact]

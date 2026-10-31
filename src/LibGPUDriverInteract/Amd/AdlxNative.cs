@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 
 using System.Runtime.InteropServices;
+using LibGPUDriverInteract.Intel.Controls;
 using LibGPUDriverInteract.Runtime;
 
 namespace LibGPUDriverInteract.Amd;
@@ -138,7 +139,7 @@ internal static unsafe class AdlxNative
         return value != 0;
     }
 
-    internal static AdlxRange Range(nint instance, int slot)
+    internal static IntegerRange Range(nint instance, int slot)
     {
         var value = new AdlxRange();
         Check(((delegate* unmanaged[Stdcall]<nint, AdlxRange*, int>)Function(instance, slot))(instance, &value),
@@ -148,7 +149,7 @@ internal static unsafe class AdlxNative
             throw new DriverFailure("ADLX returned an invalid value range.");
         }
 
-        return value;
+        return IntegerRange.Linear(value.Minimum, value.Maximum, value.Step);
     }
 
     internal static void SetInteger(nint instance, int slot, int value, WriteAdmission admission)
@@ -237,13 +238,13 @@ internal sealed unsafe class AdlxObject : IDisposable
         _pointer = pointer != 0 ? pointer : throw new DriverFailure("ADLX returned an empty interface.");
     }
 
-    internal nint Pointer => _epoch == AdlxNative.Epoch ? _pointer : 0;
+    internal nint Pointer => _pointer;
 
     public void Dispose()
     {
-        var pointer = Pointer;
+        var pointer = _pointer;
         _pointer = 0;
-        if (pointer == 0)
+        if (pointer == 0 || _epoch != AdlxNative.Epoch)
         {
             return;
         }

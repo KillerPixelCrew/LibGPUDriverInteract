@@ -21,17 +21,6 @@ internal static class IgclResult
     public const int InvalidEnumeration = 0x40000022;
     public const int SetFbcNotSupported = 0x48000020;
 
-    /// <summary>Whether the driver explicitly says the feature cannot be used.</summary>
-    /// <param name="result">Native ctl_result_t value to classify.</param>
-    /// <returns>
-    ///     True only for the explicitly recognized unsupported/not-implemented/platform/FBC results; other failures
-    ///     remain distinct.
-    /// </returns>
-    public static bool IsUnsupportedFeature(int result)
-    {
-        return result is UnsupportedFeature or NotImplemented or PlatformNotSupported or SetFbcNotSupported;
-    }
-
     /// <summary>
     ///     Whether a failed write was refused by validation, before the driver changed anything.
     /// </summary>

@@ -111,25 +111,21 @@ internal sealed partial class IntelSession : IDriverSession
             var result = control.Read();
             if (session.Lost)
             {
-                throw new DriverFailure(result.Failure?.ToString() ?? "The Intel graphics driver session was lost.",
+                throw new DriverFailure(result.Failure ?? "The Intel graphics driver session was lost.",
                     lost: true);
             }
 
-            return result.Value ?? throw new DriverFailure(result.Failure?.ToString()
-                                                           ?? result.Reason?.Detail ??
-                                                           "The Intel control has no readable value.");
+            return result.Value ?? throw new DriverFailure(result.Failure
+                                                           ?? result.Reason?.Detail
+                                                           ?? "The Intel control has no readable value.");
         }
 
         internal override void Write(GpuValue value, WriteAdmission admission)
         {
-            Check(control.Write(value, admission));
-        }
-
-        private void Check(ControlWrite result)
-        {
+            var result = control.Write(value, admission);
             if (session.Lost || result.Status != WriteStatus.Applied)
             {
-                throw new DriverFailure(result.Detail ?? result.Failure?.ToString() ?? "The Intel setter failed.",
+                throw new DriverFailure(result.Detail ?? "The Intel setter failed.",
                     result.Status == WriteStatus.Uncertain, session.Lost);
             }
         }

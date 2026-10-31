@@ -4,8 +4,8 @@ namespace LibGPUDriverInteract.Runtime;
 
 internal interface IDriverSink
 {
-    ValueTask PublishDescriptorsAsync(GpuDescriptorSet descriptors, CancellationToken cancellationToken);
-    ValueTask PublishCapabilityStateAsync(GpuState state, CancellationToken cancellationToken);
+    void PublishDescriptors(GpuDescriptorSet descriptors);
+    void PublishCapabilityState(GpuState state);
     void ReportHealth(GpuHealth health, string detail);
     void Log(GpuLogLevel level, string scope, string message);
     void LogChange(GpuLogLevel level, string scope, string key, string message);
@@ -13,12 +13,12 @@ internal interface IDriverSink
 
 internal static class CommandResults
 {
-    internal static GpuCommandResult Verified(GpuCommand command, GpuValue readback)
+    internal static GpuCommandResult Verified(GpuValue readback)
     {
         return new GpuCommandResult { Outcome = GpuCommandOutcome.AppliedVerified, ReadbackValue = readback };
     }
 
-    internal static GpuCommandResult Unverified(GpuCommand command, string? detail = null)
+    internal static GpuCommandResult Unverified(string? detail = null)
     {
         return new GpuCommandResult
         {
@@ -27,8 +27,7 @@ internal static class CommandResults
         };
     }
 
-    internal static GpuCommandResult Rejected(GpuCommand command, GpuReasonCode code, string detail,
-        bool retryable = false)
+    internal static GpuCommandResult Rejected(GpuReasonCode code, string detail, bool retryable = false)
     {
         return new GpuCommandResult
         {
@@ -36,7 +35,7 @@ internal static class CommandResults
         };
     }
 
-    internal static GpuCommandResult Indeterminate(GpuCommand command, GpuReasonCode code, string detail)
+    internal static GpuCommandResult Indeterminate(GpuReasonCode code, string detail)
     {
         return new GpuCommandResult
         {

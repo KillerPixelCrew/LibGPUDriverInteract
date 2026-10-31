@@ -229,87 +229,33 @@ internal sealed class ApplicationProfileSynchronizer
             cancellationToken.ThrowIfCancellationRequested();
             var key = SyncEntry.Identity(first.Executable, applicationSwitch.RecordId, group);
             wanted.Add(key);
-            entries.TryGetValue(key, out var earlier);
-            if (Confirmed(applicationSwitch.RegistryKeys, executable, [(earlier, SwitchWritten)]))
-            {
-                entries[key] = earlier! with { ProfileId = first.ProfileId };
-                if (Save(entries) is { } unsaved)
-                {
-                    failures.Add(new GpuProfileFailure(first.ProfileId, first.Executable,
-                        applicationSwitch.RecordId, NotRecorded(unsaved)));
-                }
-
-                continue;
-            }
-
-            var error = Bracketed(applicationSwitch.RegistryKeys, executable,
-                () => applicationSwitch.EnableFor(first.Executable, admission), out var appeared);
-            if (error is not null)
-            {
-                failures.Add(new GpuProfileFailure(first.ProfileId, first.Executable,
-                    applicationSwitch.RecordId, error));
-                continue;
-            }
-
-            entries[key] = new SyncEntry(first.ProfileId, first.Executable, applicationSwitch.RecordId, group,
-                SwitchWritten, Merge(earlier, appeared));
-            if (Save(entries) is { } notSaved)
-            {
-                failures.Add(new GpuProfileFailure(first.ProfileId, first.Executable,
-                    applicationSwitch.RecordId, NotRecorded(notSaved)));
-            }
+            var claim = new Claim(first.ProfileId, first.Executable, applicationSwitch.RecordId, group,
+                entries.GetValueOrDefault(key), SwitchWritten);
+            _ = Commit(applicationSwitch.RegistryKeys, executable, [claim],
+                () => applicationSwitch.EnableFor(first.Executable, admission), entries, failures);
         }
 
         var written = 0;
         foreach (var ((executable, _), (target, items)) in groups)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            var claims = new (SyncEntry? Earlier, string Written)[items.Count];
+            var claims = new Claim[items.Count];
             for (var index = 0; index < items.Count; index++)
             {
                 var item = items[index];
                 var key = SyncEntry.Identity(item.Executable, item.Value.CapabilityId, item.Value.InstanceId);
                 wanted.Add(key);
-                claims[index] = (entries.GetValueOrDefault(key), Render(item.Value.Value));
+                claims[index] = new Claim(item.ProfileId, item.Executable, item.Value.CapabilityId,
+                    item.Value.InstanceId, entries.GetValueOrDefault(key), Render(item.Value.Value));
             }
 
-            string? error = null;
-            RegistryValueName[] appeared = [];
-            var confirmed = Confirmed(target.RegistryKeys, executable, claims);
-            if (!confirmed)
-            {
-                error = Bracketed(target.RegistryKeys, executable,
+            if (Commit(target.RegistryKeys, executable, claims,
                     () => target.WriteForApplication(items[0].Executable,
                         [.. items.Select(item => (item.Value.CapabilityId, item.Value.Value))], admission),
-                    out appeared);
-            }
-
-            if (error is not null)
+                    entries, failures))
             {
-                failures.AddRange(items.Select(item => new GpuProfileFailure(item.ProfileId,
-                    item.Executable, item.Value.CapabilityId, error)));
-                continue;
+                written += items.Count;
             }
-
-            for (var index = 0; index < items.Count; index++)
-            {
-                var item = items[index];
-                var (earlier, value) = claims[index];
-                entries[SyncEntry.Identity(item.Executable, item.Value.CapabilityId, item.Value.InstanceId)] =
-                    new SyncEntry(item.ProfileId, item.Executable, item.Value.CapabilityId, item.Value.InstanceId,
-                        value,
-                        confirmed ? earlier!.Names : Merge(earlier, appeared));
-            }
-
-            if (Save(entries) is { } unrecorded)
-            {
-                // Applied, but not owned on disk: reported, and never written again for it.
-                failures.AddRange(items.Select(item => new GpuProfileFailure(item.ProfileId,
-                    item.Executable, item.Value.CapabilityId, NotRecorded(unrecorded))));
-                continue;
-            }
-
-            written += items.Count;
         }
 
         var removed = Remove(entries, wanted, failures, cancellationToken, admission);
@@ -437,29 +383,75 @@ internal sealed class ApplicationProfileSynchronizer
     ///     Whether every claim already holds: the recorded value is the one wanted, and the names recorded
     ///     for it are all still in the registry.
     /// </summary>
-    private bool Confirmed(
-        IReadOnlyList<string> keys,
-        string executable,
-        IReadOnlyList<(SyncEntry? Earlier, string Written)> claims)
+    private bool Confirmed(IReadOnlyList<string> keys, string executable, IReadOnlyList<Claim> claims)
     {
-        foreach (var (earlier, value) in claims)
+        foreach (var claim in claims)
         {
-            if (earlier is not { Names.Count: > 0 } || earlier.Written != value)
+            if (claim.Earlier is not { Names.Count: > 0 } || claim.Earlier.Written != claim.Written)
             {
                 return false;
             }
         }
 
         var present = Before(keys, executable);
-        foreach (var (earlier, _) in claims)
+        foreach (var claim in claims)
         {
-            foreach (var name in earlier!.Names)
+            foreach (var name in claim.Earlier!.Names)
             {
                 if (!present.Contains(name))
                 {
                     return false;
                 }
             }
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    ///     Confirms or writes one driver value and records the claims it covers, saving the record.
+    /// </summary>
+    /// <param name="keys">The <c>3DKeys</c> key paths.</param>
+    /// <param name="executable">The lower-case executable name.</param>
+    /// <param name="claims">The record entries the write covers.</param>
+    /// <param name="write">The write; null on success, or a diagnostic.</param>
+    /// <param name="entries">The record being built.</param>
+    /// <param name="failures">Receives one failure per claim when the write or the save fails.</param>
+    /// <returns><see langword="true" /> when the claims were applied and recorded.</returns>
+    private bool Commit(
+        IReadOnlyList<string> keys,
+        string executable,
+        IReadOnlyList<Claim> claims,
+        Func<string?> write,
+        Dictionary<string, SyncEntry> entries,
+        List<GpuProfileFailure> failures)
+    {
+        var confirmed = Confirmed(keys, executable, claims);
+        RegistryValueName[] appeared = [];
+        if (!confirmed)
+        {
+            var error = Bracketed(keys, executable, write, out appeared);
+            if (error is not null)
+            {
+                failures.AddRange(claims.Select(claim =>
+                    new GpuProfileFailure(claim.ProfileId, claim.Executable, claim.CapabilityId, error)));
+                return false;
+            }
+        }
+
+        foreach (var claim in claims)
+        {
+            entries[SyncEntry.Identity(claim.Executable, claim.CapabilityId, claim.InstanceId)] =
+                new SyncEntry(claim.ProfileId, claim.Executable, claim.CapabilityId, claim.InstanceId, claim.Written,
+                    confirmed ? claim.Earlier!.Names : Merge(claim.Earlier, appeared));
+        }
+
+        if (Save(entries) is { } unsaved)
+        {
+            // Applied, but not owned on disk: reported, and never written again for it.
+            failures.AddRange(claims.Select(claim => new GpuProfileFailure(claim.ProfileId, claim.Executable,
+                claim.CapabilityId, NotRecorded(unsaved))));
+            return false;
         }
 
         return true;
@@ -617,6 +609,15 @@ internal sealed class ApplicationProfileSynchronizer
     }
 
     private sealed record Wanted(string ProfileId, string Executable, GpuApplicationValue Value);
+
+    /// <summary>One record entry a driver write covers, with what it recorded before.</summary>
+    private sealed record Claim(
+        string ProfileId,
+        string Executable,
+        string CapabilityId,
+        string? InstanceId,
+        SyncEntry? Earlier,
+        string Written);
 }
 
 /// <summary>Finds the <c>3DKeys</c> keys of one Intel adapter in the display adapter class.</summary>

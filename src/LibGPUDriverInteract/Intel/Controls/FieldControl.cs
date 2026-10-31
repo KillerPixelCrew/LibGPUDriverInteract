@@ -56,26 +56,16 @@ internal class FieldControl<T> : IntelControl
         _decode = decode;
         _encode = encode;
         _carry = carry;
-        SupportKey = source.Claim(Key);
     }
 
     /// <summary>The structure the row belongs to.</summary>
     protected IgclSource<T> Source { get; }
 
     /// <inheritdoc />
-    public override string SupportKey { get; }
-
-    /// <inheritdoc />
     public override ControlRead Read()
     {
         var result = Source.Read(out var value);
         return result == IgclResult.Success ? _decode(this, value) : ControlRead.Driver(result);
-    }
-
-    /// <inheritdoc />
-    public override ControlWrite ProbeSupport(WriteAdmission admission)
-    {
-        return Source.ProbeSupport(admission);
     }
 
     /// <inheritdoc />

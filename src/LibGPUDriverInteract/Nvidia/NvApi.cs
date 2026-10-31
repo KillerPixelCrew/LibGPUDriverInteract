@@ -179,28 +179,18 @@ internal sealed unsafe partial class NvApi : INvProfiles, INvAdaptiveSync, IDisp
             Check(status, "DRS FindApplicationByName");
         }
 
-        var info = new byte[ProfileSize];
-        Number(info, 0, Version(ProfileSize, 1));
-        Unicode(info, 4, profileName);
-        fixed (char* name = profileName)
+        profile = FindProfile(profileName);
+        if (profile == 0)
         {
-            status = ((delegate* unmanaged[Cdecl]<nint, char*, nint*, int>)Function(0x7e4a9a0b))(Drs, name, &profile);
-        }
-
-        if (status == -163)
-        {
+            var info = new byte[ProfileSize];
+            Number(info, 0, Version(ProfileSize, 1));
+            Unicode(info, 4, profileName);
             fixed (byte* pointer = info)
             {
                 var createProfile = (delegate* unmanaged[Cdecl]<nint, byte*, nint*, int>)Function(0xcc176068);
                 admission.Check();
-                Check(
-                    createProfile(Drs, pointer, &profile),
-                    "DRS CreateProfile", true);
+                Check(createProfile(Drs, pointer, &profile), "DRS CreateProfile", true);
             }
-        }
-        else
-        {
-            Check(status, "DRS FindProfileByName");
         }
 
         fixed (byte* pointer = app)
@@ -602,7 +592,7 @@ internal sealed unsafe partial class NvApi : INvProfiles, INvAdaptiveSync, IDisp
         }
     }
 
-    internal bool HasFunction(uint id)
+    private bool HasFunction(uint id)
     {
         return FunctionPointer(id) != 0;
     }

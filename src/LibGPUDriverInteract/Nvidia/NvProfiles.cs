@@ -115,6 +115,8 @@ internal sealed class NvProfiles
         {
             foreach (var executable in game.Executables.Distinct(StringComparer.OrdinalIgnoreCase))
             {
+                string? name = null;
+                string? lookupError = null;
                 foreach (var value in game.Values)
                 {
                     token.ThrowIfCancellationRequested();
@@ -128,25 +130,37 @@ internal sealed class NvProfiles
                         continue;
                     }
 
-                    try
+                    // The executable's profile is looked up once, at its first accepted value.
+                    if (name is null && lookupError is null)
                     {
-                        var handle = _api.Application(executable, false, OwnedProfile(executable), admission);
-                        var name = handle == 0 ? OwnedProfile(executable) : _api.ProfileName(handle);
-                        var key = NvOwnedSetting.Identity(name, control.Setting.Id);
-                        if (!requests.TryGetValue(key, out var list))
+                        try
                         {
-                            requests[key] = list = [];
+                            var owned = OwnedProfile(executable);
+                            var handle = _api.Application(executable, false, owned, admission);
+                            name = handle == 0 ? owned : _api.ProfileName(handle);
                         }
-
-                        list.Add(new Request(game.ProfileId, executable, name, control.Setting.Id,
-                            value.CapabilityId, NvSettingControl.Decode(value.Value)));
+                        catch (Exception error) when (error is not OperationCanceledException &&
+                                                      error is not DriverFailure { Lost: true })
+                        {
+                            lookupError = error.Message;
+                        }
                     }
-                    catch (Exception error) when (error is not OperationCanceledException &&
-                                                  error is not DriverFailure { Lost: true })
+
+                    if (lookupError is not null)
                     {
                         failures.Add(new GpuProfileFailure(game.ProfileId, executable, value.CapabilityId,
-                            error.Message));
+                            lookupError));
+                        continue;
                     }
+
+                    var key = NvOwnedSetting.Identity(name!, control.Setting.Id);
+                    if (!requests.TryGetValue(key, out var list))
+                    {
+                        requests[key] = list = [];
+                    }
+
+                    list.Add(new Request(game.ProfileId, executable, name!, control.Setting.Id,
+                        value.CapabilityId, NvSettingControl.Decode(value.Value)));
                 }
             }
         }

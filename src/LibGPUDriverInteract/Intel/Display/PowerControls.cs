@@ -173,11 +173,11 @@ internal static unsafe class PowerSavingControls
         return new FieldControl<CtlPowerOptimizationSettings>(
             settings,
             descriptor,
-            static (_, current) => ControlRead.Of(IntelControl.Boolean(current.Enable != 0)),
+            static (_, current) => ControlRead.Of(GpuValue.Boolean(current.Enable != 0)),
             (_, current, known, value) =>
             {
                 var request = Prepared(current, feature, source);
-                request.Enable = value.BooleanValue == true ? (byte)1 : (byte)0;
+                request.Enable = IntelControl.Flag(value);
                 if (feature == FeatureDpst)
                 {
                     request.Data.Dpst.EnabledFeatures = DpstFeatures(current, known);
@@ -367,20 +367,13 @@ internal static unsafe class LaceControls
         request.OperationGet = GetCurrent;
         request.Aggressiveness.Entries = entries;
         request.Aggressiveness.Table = tableAddress;
-        IgclSource<CtlLaceConfig> source = new(session, output.Handle, api.GetLace, api.SetLace, request,
-            current =>
-            {
-                GC.KeepAlive(table);
-                current.OperationGet = 0;
-                current.OperationSet = SetCustom;
-                return current;
-            });
+        IgclSource<CtlLaceConfig> source = new(session, output.Handle, api.GetLace, api.SetLace, request);
         return
         [
             new FieldControl<CtlLaceConfig>(
                 source,
                 DriverDescriptors.Toggle("display.lace", instance, "Contrast enhancement (LACE)", placement),
-                static (_, config) => ControlRead.Of(IntelControl.Boolean(config.Enabled != 0)),
+                static (_, config) => ControlRead.Of(GpuValue.Boolean(config.Enabled != 0)),
                 (_, current, known, value) =>
                 {
                     // Holds the table for as long as the controls live; the driver only ever sees its address.

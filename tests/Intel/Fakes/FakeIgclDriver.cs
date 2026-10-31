@@ -69,7 +69,7 @@ internal sealed unsafe class FakeIgclDriver
     internal IntelSession CreateSession(string directory, IDriverSink sink)
     {
         return new IntelSession(directory, sink, IgclApi.Bind(Resolve, sink)!, Registry,
-            new IntelGraphicsMemoryTransport(Registry, AdapterClassKey.ClassPath, 0, sink));
+            new IntelGraphicsMemoryTransport(Registry, 0, [], sink));
     }
 
     private nint Resolve(string name)

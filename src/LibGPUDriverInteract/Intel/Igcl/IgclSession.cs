@@ -175,14 +175,14 @@ internal sealed unsafe class IgclSession : IDisposable
         var result = api.Init(&args, &handle);
         if (result != IgclResult.Success || handle == 0)
         {
-            log.Change(GpuLogLevel.Warn, "igcl", "open", $"ctlInit refused with {IgclResult.Describe(result)}.");
+            log.LogChange(GpuLogLevel.Warn, "igcl", "open", $"ctlInit refused with {IgclResult.Describe(result)}.");
             return null;
         }
 
         IgclSession session = new(api, handle, log) { SupportedVersion = args.SupportedVersion };
         if (session.TryEnumerate())
         {
-            log.Change(GpuLogLevel.Info, "igcl", "open", "ctlInit succeeded and an Intel adapter answered.");
+            log.LogChange(GpuLogLevel.Info, "igcl", "open", "ctlInit succeeded and an Intel adapter answered.");
             return session;
         }
 
@@ -247,7 +247,7 @@ internal sealed unsafe class IgclSession : IDisposable
         var result = Api.EnumerateDevices(_handle, &count, null);
         if (result != IgclResult.Success || count == 0)
         {
-            _log.Change(GpuLogLevel.Info, "igcl", "open",
+            _log.LogChange(GpuLogLevel.Info, "igcl", "open",
                 $"No adapters enumerated ({IgclResult.Describe(result)}, count {count}).");
             return false;
         }
@@ -260,7 +260,7 @@ internal sealed unsafe class IgclSession : IDisposable
 
         if (result != IgclResult.Success)
         {
-            _log.Change(GpuLogLevel.Warn, "igcl", "open",
+            _log.LogChange(GpuLogLevel.Warn, "igcl", "open",
                 $"Adapter handles could not be fetched ({IgclResult.Describe(result)}).");
             return false;
         }
@@ -276,7 +276,7 @@ internal sealed unsafe class IgclSession : IDisposable
 
             if (adapter.PciVendorId != IntelVendorId)
             {
-                _log.Change(GpuLogLevel.Info, "igcl", $"adapter.{index}",
+                _log.LogChange(GpuLogLevel.Info, "igcl", $"adapter.{index}",
                     $"Adapter {index} is vendor {adapter.PciVendorId:x4}; not Intel, skipped.");
                 continue;
             }
@@ -294,7 +294,7 @@ internal sealed unsafe class IgclSession : IDisposable
     {
         if (Api.GetDeviceProperties is null)
         {
-            _log.Change(GpuLogLevel.Warn, "igcl", $"adapter.{index}",
+            _log.LogChange(GpuLogLevel.Warn, "igcl", $"adapter.{index}",
                 "ctlGetDeviceProperties is missing; adapters cannot be identified.");
             return null;
         }
@@ -319,7 +319,7 @@ internal sealed unsafe class IgclSession : IDisposable
 
         if (result != IgclResult.Success)
         {
-            _log.Change(GpuLogLevel.Warn, "igcl", $"adapter.{index}",
+            _log.LogChange(GpuLogLevel.Warn, "igcl", $"adapter.{index}",
                 $"Adapter {index} properties refused with {IgclResult.Describe(result)}.");
             return null;
         }
@@ -390,7 +390,7 @@ internal sealed unsafe class IgclSession : IDisposable
             outputs.Add(new IgclOutput(handles[index], adapter, index, properties, ReadInternal(handles[index])));
         }
 
-        _log.Change(
+        _log.LogChange(
             GpuLogLevel.Info,
             "igcl",
             $"outputs.{adapter.Index}",

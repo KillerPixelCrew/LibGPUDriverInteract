@@ -157,21 +157,19 @@ internal sealed class NvSession : IDriverSession
     {
         Try(instance + "/vrr", () =>
         {
-            _api.Vrr(output.Id);
-            controls.Add(new NvReadOnlyControl(
+            var flags = _api.Vrr(output.Id);
+            controls.Add(new DelegateControl(
                 DriverDescriptors.ReadOnly("display.gsync-status", instance, "G-SYNC state", section,
                     [("unsupported", "Unavailable"), ("off", "Off"), ("enabled", "Enabled"), ("active", "Active")]),
-                () => (_api.Vrr(output.Id) & 0x13) switch
+                () => GpuValue.Choice(_api.Vrr(output.Id) switch
                 {
-                    var flags when (flags & 2) == 0 => "unsupported",
-                    var flags when (flags & 16) != 0 => "active",
-                    var flags when (flags & 1) != 0 => "enabled",
+                    var current when (current & 2) == 0 => "unsupported",
+                    var current when (current & 16) != 0 => "active",
+                    var current when (current & 1) != 0 => "enabled",
                     _ => "off"
-                }));
-        });
-        Try(instance + "/adaptive-sync", () =>
-        {
-            if ((_api.Vrr(output.Id) & 2u) != 0)
+                }),
+                static (_, _) => throw new DriverFailure("This NVIDIA state is read only.")));
+            if ((flags & 2u) != 0)
             {
                 controls.Add(new NvGsyncControl(_api, output.Id, instance, section));
             }
@@ -191,7 +189,7 @@ internal sealed class NvSession : IDriverSession
         });
         Try(instance + "/dither", () =>
         {
-            if (!_api.HasFunction(0x932ac8fb) || !_api.HasFunction(0xdf0dfcdd))
+            if (!_api.SupportsDither)
             {
                 return;
             }
@@ -223,7 +221,7 @@ internal sealed class NvSession : IDriverSession
         });
         Try(instance + "/hdr-output", () =>
         {
-            if (!_api.HasFunction(0x81fed88d) || !_api.HasFunction(0x98e7661a))
+            if (!_api.SupportsOutputMode)
             {
                 return;
             }
@@ -247,43 +245,15 @@ internal sealed class NvSession : IDriverSession
 
     private void Try(string key, Action action)
     {
-        try
-        {
-            action();
-        }
-        catch (Exception error) when (error is not DriverFailure { Lost: true })
-        {
-            _report(key, error.Message);
-        }
+        DriverLog.Try(_report, key, action);
     }
 }
 
 /// <summary>One DWORD setting of the global DRS profile, used by driver-wide choice controls.</summary>
 /// <remarks>Reads and writes use the state the pass loaded (<see cref="NvSession.BeginPass" />).</remarks>
-/// <param name="api">Borrowed DRS session/profile API, used only on the driver's serialized native lane.</param>
-/// <param name="id">Driver DWORD setting identity within the global profile.</param>
-internal sealed class NvDrsSetting(INvProfiles api, uint id)
-{
-    internal uint Read()
-    {
-        return api.Get(api.GlobalProfile(), id).Value;
-    }
-
-    /// <summary>Writes and commits, then reloads so the readback sees the committed store.</summary>
-    /// <param name="value">DWORD value validated by the published control.</param>
-    /// <param name="admission">Checked by the native setter and SaveSettings before each mutation.</param>
-    internal void Write(uint value, WriteAdmission admission)
-    {
-        api.Set(api.GlobalProfile(), id, value, admission);
-        api.Save(admission);
-        api.Load();
-    }
-
-}
-
 internal sealed class NvSettingControl : DriverControl
 {
-    private readonly NvDrsSetting _drs;
+    private readonly INvProfiles _api;
 
     internal NvSettingControl(INvProfiles api, NvSettingDefinition setting, string section, IEnumerable<uint> values)
         : base(DriverDescriptors.Choice("driver." + setting.Id.ToString("x8"), "driver", setting.Label, section,
@@ -291,7 +261,7 @@ internal sealed class NvSettingControl : DriverControl
             values.Select(value => (Encode(value), setting.Values.FirstOrDefault(option => option.Value == value).Label
                                                    ?? "Driver value 0x" + value.ToString("X8")))))
     {
-        _drs = new NvDrsSetting(api, setting.Id);
+        _api = api;
         Setting = setting;
     }
 
@@ -299,12 +269,15 @@ internal sealed class NvSettingControl : DriverControl
 
     internal override GpuValue Read()
     {
-        return GpuValue.Choice(Encode(_drs.Read()));
+        return GpuValue.Choice(Encode(_api.Get(_api.GlobalProfile(), Setting.Id).Value));
     }
 
     internal override void Write(GpuValue value, WriteAdmission admission)
     {
-        _drs.Write(Decode(value), admission);
+        var requested = Decode(value);
+        _api.Set(_api.GlobalProfile(), Setting.Id, requested, admission);
+        // The runtime's BeginPass reloads DRS before any readback, so no reload is needed here.
+        _api.Save(admission);
     }
 
     internal static string Encode(uint value)
@@ -316,18 +289,5 @@ internal sealed class NvSettingControl : DriverControl
     {
         return uint.Parse(value.ChoiceValue!.AsSpan(1), NumberStyles.HexNumber,
             CultureInfo.InvariantCulture);
-    }
-}
-
-internal sealed class NvReadOnlyControl(GpuDescriptor descriptor, Func<string> read) : DriverControl(descriptor)
-{
-    internal override GpuValue Read()
-    {
-        return GpuValue.Choice(read());
-    }
-
-    internal override void Write(GpuValue value, WriteAdmission admission)
-    {
-        throw new DriverFailure("This NVIDIA state is read only.");
     }
 }

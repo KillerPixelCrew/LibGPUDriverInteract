@@ -12,6 +12,8 @@ internal sealed class DriverDisplayTargets(
 {
     internal IReadOnlyList<ActiveDisplayPath> Active => active;
 
+    internal IReadOnlyList<DisplayTargetIdentity> Targets => targets;
+
     internal static DriverDisplayTargets Capture()
     {
         IReadOnlyList<DisplayTargetIdentity> targets;
@@ -56,7 +58,7 @@ internal sealed class DriverDisplayTargets(
             string.Equals(target.EdidIdentity, edidIdentity, StringComparison.Ordinal)));
     }
 
-    internal GpuDisplayTarget Describe(DisplayTargetIdentity? target, string nativeOutputId, string? sourceName = null,
+    internal GpuDisplayTarget Describe(DisplayTargetIdentity? target, string? nativeOutputId, string? sourceName = null,
         string? edidIdentity = null)
     {
         return new GpuDisplayTarget

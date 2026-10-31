@@ -66,7 +66,7 @@ internal sealed unsafe partial class AdlxSession
         Feature(service, 19, "vari-bright", feature =>
         {
             Toggle(feature, "vari-bright", "Vari-Bright");
-            controls.Add(new AdlxControl(DriverDescriptors.Choice("display.vari-bright-mode", instance,
+            controls.Add(new DelegateControl(DriverDescriptors.Choice("display.vari-bright-mode", instance,
                     "Vari-Bright policy",
                     section, GpuProfileScope.GlobalOnly,
                     VariBrightModes.Select((label, index) => (AmdValue.Encode(index), label))),
@@ -93,13 +93,13 @@ internal sealed unsafe partial class AdlxSession
                 "freesync-color-accuracy", "FreeSync color accuracy"));
         }
 
-        if (_dither is { SupportsDithering: true } && _mapping != 0)
+        if (_dither is { SupportsDithering: true })
         {
             Try(instance + "/dithering", () =>
             {
                 var ids = AdlIds(display);
                 _dither.Read(ids.Adapter, ids.Display);
-                controls.Add(new AdlxControl(DriverDescriptors.Choice("display.dithering", instance, "Dithering",
+                controls.Add(new DelegateControl(DriverDescriptors.Choice("display.dithering", instance, "Dithering",
                         section,
                         GpuProfileScope.GlobalOnly,
                         DitherModes.Select((label, index) => (AmdValue.Encode(index), label))),
@@ -132,7 +132,7 @@ internal sealed unsafe partial class AdlxSession
 
         void Toggle(AdlxObject feature, string id, string label, GpuRole role = GpuRole.Toggle)
         {
-            controls.Add(new AdlxControl(DriverDescriptors.Toggle("display." + id, instance, label, section,
+            controls.Add(new DelegateControl(DriverDescriptors.Toggle("display." + id, instance, label, section,
                         GpuProfileScope.GlobalOnly) with
             {
                 Role = role
@@ -152,7 +152,7 @@ internal sealed unsafe partial class AdlxSession
                 return;
             }
 
-            controls.Add(new AdlxControl(DriverDescriptors.Choice("display." + id, instance, label, section,
+            controls.Add(new DelegateControl(DriverDescriptors.Choice("display." + id, instance, label, section,
                     GpuProfileScope.GlobalOnly,
                     values.Select(value => (AmdValue.Encode(value.Value), value.Label))),
                 () => GpuValue.Choice(AmdValue.Encode(AdlxNative.Integer(feature.Pointer, read))),
@@ -172,12 +172,12 @@ internal sealed unsafe partial class AdlxSession
         void Range(AdlxObject feature, string id, string label, int supported, int range, int read, int write)
         {
             var bounds = AdlxNative.Range(feature.Pointer, range);
-            controls.Add(new AdlxControl(DriverDescriptors.Range("display." + id, instance, label, section,
+            controls.Add(new DelegateControl(DriverDescriptors.Range("display." + id, instance, label, section,
                     GpuProfileScope.GlobalOnly, bounds.Minimum, bounds.Maximum, bounds.Step),
                 () => GpuValue.Integer(AdlxNative.Integer(feature.Pointer, read)), (value, admission) =>
                 {
                     RequireSupported(feature, supported);
-                    if (!Within(value.IntegerValue!.Value, AdlxNative.Range(feature.Pointer, range)))
+                    if (!AdlxNative.Range(feature.Pointer, range).Accepts(value.IntegerValue!.Value))
                     {
                         throw new DriverFailure("This color value is outside the current AMD range.");
                     }

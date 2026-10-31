@@ -47,10 +47,7 @@ internal sealed unsafe class ThreeDFeature
 {
     private readonly IgclSession _session;
     private PassCache<RawFeatureValue> _global;
-    private bool _globalWasDefault;
-    private RawFeatureValue _lastGlobal;
-    private bool _lastGlobalKnown;
-    private string? _supportKey;
+    private RawFeatureValue? _lastGlobal;
 
     public ThreeDFeature(
         IgclSession session,
@@ -98,42 +95,6 @@ internal sealed unsafe class ThreeDFeature
 
     /// <summary>Whether a change reaches a running game.</summary>
     public bool LiveChange => (Details.FeatureMiscSupport & ThreeDFeatureCatalog.MiscLiveChange) != 0;
-
-    /// <summary>The feature's support key: the key of its first control, stable across rebuilds.</summary>
-    /// <param name="key">The key of a control of this feature.</param>
-    /// <returns>The key every control of the feature shares.</returns>
-    public string Claim(string key)
-    {
-        return _supportKey ??= key;
-    }
-
-    /// <summary>Probes the setter with the whole global native value while preserving inherited defaults.</summary>
-    /// <param name="admission">
-    ///     Caller cancellation, deadline and live-session admission, checked immediately before any
-    ///     setter.
-    /// </param>
-    /// <returns>
-    ///     The native round-trip outcome; an inherited/default global value succeeds without materializing a stored
-    ///     override.
-    /// </returns>
-    public ControlWrite ProbeSupport(WriteAdmission admission)
-    {
-        var result = Read(null, out var current);
-        if (result == IgclResult.Success && _globalWasDefault)
-        {
-            // DATA_NOT_FOUND is inheritance/default state, not a returned value. Writing our
-            // synthesized default would create an override rather than round-trip native state.
-            return new ControlWrite(WriteStatus.Applied,
-                Detail: "driver-advertised default; no stored override to round-trip");
-        }
-
-        if (result == IgclResult.Success)
-        {
-            result = Write(null, current, admission);
-        }
-
-        return ControlWrite.From(result, Info.Label + " support discovery");
-    }
 
     /// <summary>What the driver means when it has no stored value: the defaults its table reports.</summary>
     /// <returns>
@@ -230,11 +191,6 @@ internal sealed unsafe class ThreeDFeature
             }
         }
 
-        if (application is null)
-        {
-            _globalWasDefault = result == IgclResult.DataNotFound;
-        }
-
         if (result == IgclResult.DataNotFound)
         {
             value = DefaultValue();
@@ -247,7 +203,6 @@ internal sealed unsafe class ThreeDFeature
             if (result == IgclResult.Success)
             {
                 _lastGlobal = value;
-                _lastGlobalKnown = true;
             }
         }
 
@@ -330,7 +285,7 @@ internal sealed unsafe class ThreeDFeature
             return current;
         }
 
-        return _lastGlobalKnown ? _lastGlobal : DefaultValue();
+        return _lastGlobal ?? DefaultValue();
     }
 
     /// <summary>A get or set of this feature, carrying the value type the driver reported.</summary>
@@ -394,19 +349,9 @@ internal sealed class ThreeDFeatureControl : IntelControl
         Feature = feature;
         _decode = decode;
         _encode = encode;
-        SupportKey = feature.Claim(Key);
     }
 
     public ThreeDFeature Feature { get; }
-
-    /// <inheritdoc />
-    public override string SupportKey { get; }
-
-    /// <inheritdoc />
-    public override ControlWrite ProbeSupport(WriteAdmission admission)
-    {
-        return Feature.ProbeSupport(admission);
-    }
 
     /// <summary>Builds the controls for one reported feature.</summary>
     /// <param name="feature">The feature.</param>
@@ -440,10 +385,7 @@ internal sealed class ThreeDFeatureControl : IntelControl
                     controls.Add(Choice(feature, type.Id, instance, type.Label, members, placement,
                         static (control, raw) => control.MemberOf(raw.AppProfile.EnabledTierProfiles),
                         static (control, ref raw, value) =>
-                        {
-                            raw.AppProfile.TierType = control.Feature.TierType;
-                            raw.AppProfile.EnabledTierProfiles = control.ValueOf(value);
-                        }));
+                            raw.AppProfile.EnabledTierProfiles = control.ValueOf(value)));
                 }
                 else
                 {
@@ -534,11 +476,11 @@ internal sealed class ThreeDFeatureControl : IntelControl
         List<ThreeDFeatureControl> controls)
     {
         controls.Add(Toggle(feature, "graphics.adaptive-sync", instance, "Adaptive sync", placement,
-            static (_, raw) => Boolean(raw.AdaptiveSync.AdaptiveSync != 0),
+            static (_, raw) => GpuValue.Boolean(raw.AdaptiveSync.AdaptiveSync != 0),
             static (_, ref raw, value) => raw.AdaptiveSync.AdaptiveSync = Flag(value)));
         controls.Add(Toggle(feature, "graphics.adaptive-sync-tearing", instance, "Tear above max refresh",
             placement.Plus(3),
-            static (_, raw) => Boolean(raw.AdaptiveSync.AllowAsyncForHighFps != 0),
+            static (_, raw) => GpuValue.Boolean(raw.AdaptiveSync.AllowAsyncForHighFps != 0),
             static (_, ref raw, value) => raw.AdaptiveSync.AllowAsyncForHighFps = Flag(value)));
         if (feature.AdaptiveSyncCaps is not { AdaptiveBalanceSupported: not 0 } caps)
         {
@@ -546,7 +488,7 @@ internal sealed class ThreeDFeatureControl : IntelControl
         }
 
         controls.Add(Toggle(feature, "graphics.adaptive-balance", instance, "Adaptive balance", placement.Plus(1),
-            static (_, raw) => Boolean(raw.AdaptiveSync.AdaptiveBalance != 0),
+            static (_, raw) => GpuValue.Boolean(raw.AdaptiveSync.AdaptiveBalance != 0),
             static (_, ref raw, value) => raw.AdaptiveSync.AdaptiveBalance = Flag(value)));
         if (ValueMapping.FromFloat(caps.StrengthMinimum, caps.StrengthMaximum, caps.StrengthStep, false)
             is not { } strength)
@@ -610,7 +552,7 @@ internal sealed class ThreeDFeatureControl : IntelControl
         {
             case IgclValueType.Bool:
                 controls.Add(Toggle(feature, id, instance, label, placement,
-                    static (_, raw) => Boolean(raw.Scalar.Enable != 0),
+                    static (_, raw) => GpuValue.Boolean(raw.Scalar.Enable != 0),
                     static (_, ref raw, value) =>
                     {
                         raw.Scalar = default;
@@ -708,11 +650,6 @@ internal sealed class ThreeDFeatureControl : IntelControl
             _ => scalar.FloatValue
         };
         return GpuValue.Integer(range.ToInteger(native));
-    }
-
-    private static byte Flag(GpuValue value)
-    {
-        return value.BooleanValue == true ? (byte)1 : (byte)0;
     }
 
     private static Placement Scoped(ThreeDFeature feature, Placement placement)

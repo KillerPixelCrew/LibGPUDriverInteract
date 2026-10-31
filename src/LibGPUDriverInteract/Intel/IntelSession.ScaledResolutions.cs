@@ -7,6 +7,8 @@ namespace LibGPUDriverInteract.Intel;
 
 internal sealed partial class IntelSession
 {
+    private const int MaxCustomSourceModes = 20;
+
     internal unsafe GpuScaledResolutionCatalog? ReadScaledResolutions(GpuDisplayTarget display)
     {
         EnsureSession();
@@ -17,8 +19,7 @@ internal sealed partial class IntelSession
         }
 
         _session.RefreshOutputs();
-        var output = _session.Outputs.SingleOrDefault(item => (uint)item.Adapter.Luid == display.AdapterLowPart
-            && (int)(item.Adapter.Luid >> 32) == display.AdapterHighPart && item.TargetId == display.TargetId);
+        var output = FindOutput(display);
         if (output is null)
         {
             return null;
@@ -26,7 +27,7 @@ internal sealed partial class IntelSession
 
         var args = new CtlCustomModeArgs();
         var result = _session.Call(_api.GetSetCustomMode, output.Handle, ref args);
-        if (result != 0 || args.Count > 20)
+        if (result != 0 || args.Count > MaxCustomSourceModes)
         {
             return Catalog(false, [], "Custom source modes unavailable: " + IgclResult.Describe(result));
         }
@@ -48,7 +49,8 @@ internal sealed partial class IntelSession
 
         return Catalog(true, modes.Take((int)args.Count)
             .Select(mode => new GpuScaledResolution((int)mode.SourceX, (int)mode.SourceY)).ToArray(),
-            "Intel output-specific source modes; accepted changes are available immediately. Maximum 20 entries.");
+            "Intel output-specific source modes; accepted changes are available immediately. "
+            + $"Maximum {MaxCustomSourceModes} entries.");
 
         GpuScaledResolutionCatalog Catalog(bool supported, IReadOnlyList<GpuScaledResolution> sizes, string detail)
         {
@@ -71,13 +73,13 @@ internal sealed partial class IntelSession
             return Result(true, false, remove ? "The source mode is already absent." : "The source mode already exists.");
         }
 
-        if (!remove && fresh.Modes.Count >= 20)
+        if (!remove && fresh.Modes.Count >= MaxCustomSourceModes)
         {
-            return Result(false, false, "The Intel driver accepts at most 20 custom source modes.");
+            return Result(false, false,
+                $"The Intel driver accepts at most {MaxCustomSourceModes} custom source modes.");
         }
 
-        var output = _session.Outputs.Single(item => (uint)item.Adapter.Luid == fresh.Display.AdapterLowPart
-            && (int)(item.Adapter.Luid >> 32) == fresh.Display.AdapterHighPart && item.TargetId == fresh.Display.TargetId);
+        var output = FindOutput(fresh.Display)!;
         var source = new CtlCustomSourceMode { SourceX = (uint)mode.Width, SourceY = (uint)mode.Height };
         var args = new CtlCustomModeArgs { Operation = remove ? 2 : 1, Count = 1, Modes = &source };
         admission.Check();
@@ -91,5 +93,11 @@ internal sealed partial class IntelSession
         {
             return new GpuScaledResolutionResult(accepted, changed, GpuScaledResolutionActivation.Immediate, detail);
         }
+    }
+
+    private IgclOutput? FindOutput(GpuDisplayTarget display)
+    {
+        return _session.Outputs.SingleOrDefault(item => (uint)item.Adapter.Luid == display.AdapterLowPart
+            && (int)(item.Adapter.Luid >> 32) == display.AdapterHighPart && item.TargetId == display.TargetId);
     }
 }

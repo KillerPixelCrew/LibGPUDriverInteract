@@ -8,25 +8,21 @@ internal sealed class RecordingDriverSink : IDriverSink
     internal GpuDescriptorSet? Descriptors { get; private set; }
     internal ConcurrentQueue<GpuState> States { get; } = new();
     internal ConcurrentQueue<string> Logs { get; } = new();
-    internal List<GpuStatus> Statuses { get; } = [];
     internal int DescriptorPublications { get; private set; }
 
-    public ValueTask PublishDescriptorsAsync(GpuDescriptorSet descriptors, CancellationToken token)
+    public void PublishDescriptors(GpuDescriptorSet descriptors)
     {
         Descriptors = descriptors;
         DescriptorPublications++;
-        return ValueTask.CompletedTask;
     }
 
-    public ValueTask PublishCapabilityStateAsync(GpuState state, CancellationToken token)
+    public void PublishCapabilityState(GpuState state)
     {
         States.Enqueue(state);
-        return ValueTask.CompletedTask;
     }
 
     public void ReportHealth(GpuHealth health, string detail)
     {
-        Statuses.Add(new GpuStatus(health, detail));
     }
 
     public void Log(GpuLogLevel level, string scope, string message)
@@ -42,14 +38,12 @@ internal sealed class RecordingDriverSink : IDriverSink
 
 internal sealed class DriverTestSession(params DriverControl[] controls) : IDriverSession
 {
-    internal IDriverSink? Sink { get; set; }
     internal int Discoveries { get; private set; }
     internal int Passes { get; private set; }
     internal int Disposals { get; private set; }
     internal int Initializations { get; private set; }
     internal Action<WriteAdmission, CancellationToken>? BeforeInitialize { get; set; }
     internal Action? BeforeDispose { get; set; }
-    internal Action? BeforePass { get; set; }
     internal Action? BeforeDiscover { get; set; }
     internal DriverModel Model { get; set; } = new([DriverDescriptors.Section("graphics", "Graphics")], controls);
 
@@ -62,7 +56,6 @@ internal sealed class DriverTestSession(params DriverControl[] controls) : IDriv
     public void BeginPass()
     {
         Passes++;
-        BeforePass?.Invoke();
     }
 
     public DriverModel Discover()
@@ -84,9 +77,13 @@ internal sealed class DriverTestSession(params DriverControl[] controls) : IDriv
     }
 }
 
-internal sealed class DriverTestControl(string id = "enabled")
-    : DriverControl(DriverDescriptors.Toggle(id, "driver", id, "graphics", GpuProfileScope.GlobalOnly))
+internal sealed class DriverTestControl(GpuDescriptor descriptor) : DriverControl(descriptor)
 {
+    internal DriverTestControl(string id = "enabled")
+        : this(DriverDescriptors.Toggle(id, "driver", id, "graphics", GpuProfileScope.GlobalOnly))
+    {
+    }
+
     internal Func<GpuValue>? Reading { get; set; }
     internal Action? BeforeWrite { get; set; }
     internal Action? AfterWrite { get; set; }
@@ -149,5 +146,16 @@ internal sealed class DriverTestControl(string id = "enabled")
         {
             throw new DriverFailure(failure, true);
         }
+    }
+
+    /// <summary>Turns the default fixture control on.</summary>
+    internal static GpuCommand EnableCommand()
+    {
+        return new GpuCommand
+        {
+            CapabilityId = "enabled",
+            InstanceId = "driver",
+            RequestedValue = GpuValue.Boolean(value: true)
+        };
     }
 }

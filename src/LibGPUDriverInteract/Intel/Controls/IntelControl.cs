@@ -3,52 +3,11 @@ using LibGPUDriverInteract.Runtime;
 
 namespace LibGPUDriverInteract.Intel.Controls;
 
-/// <summary>Where a failure came from.</summary>
-internal enum FailureKind
-{
-    /// <summary>The driver answered with an IGCL result other than success.</summary>
-    DriverResult,
-
-    /// <summary>A call threw.</summary>
-    Exception,
-
-    /// <summary>The registry could not be read or written.</summary>
-    Registry,
-
-    /// <summary>The plugin refused the value before it reached the driver.</summary>
-    Refused
-}
-
-/// <summary>Why a read or write did not succeed, in terms of whatever transport carried it.</summary>
-/// <param name="Kind">Where it came from.</param>
-/// <param name="Result">The IGCL result, for <see cref="FailureKind.DriverResult" />.</param>
-/// <param name="Detail">Plain diagnostic text for every other kind.</param>
-internal readonly record struct ControlFailure(FailureKind Kind, int Result = 0, string? Detail = null)
-{
-    public static ControlFailure Driver(int result)
-    {
-        return new ControlFailure(FailureKind.DriverResult, result);
-    }
-
-    /// <inheritdoc />
-    public override string ToString()
-    {
-        return Kind == FailureKind.DriverResult
-            ? $"the driver answered {IgclResult.Describe(Result)}"
-            : Detail ?? Kind.ToString();
-    }
-}
-
 /// <summary>What one read returned.</summary>
 /// <param name="Value">The value in the descriptor's shape, or null when it is unknown or unreadable.</param>
-/// <param name="Available">Whether the control can be used right now.</param>
-/// <param name="Reason">Why it cannot, when it cannot.</param>
+/// <param name="Reason">Why the control cannot be used right now, when it cannot.</param>
 /// <param name="Failure">Why it could not be read, or null when the read succeeded.</param>
-internal readonly record struct ControlRead(
-    GpuValue? Value,
-    bool Available = true,
-    GpuReason? Reason = null,
-    ControlFailure? Failure = null)
+internal readonly record struct ControlRead(GpuValue? Value, GpuReason? Reason = null, string? Failure = null)
 {
     /// <summary>A successful read; a null value is one the descriptor has no equivalent for.</summary>
     /// <param name="value">The value, or null when unknown.</param>
@@ -63,13 +22,13 @@ internal readonly record struct ControlRead(
     /// <returns>The read.</returns>
     public static ControlRead Driver(int result)
     {
-        return new ControlRead(null, Failure: ControlFailure.Driver(result));
+        return new ControlRead(null, Failure: $"the driver answered {IgclResult.Describe(result)}");
     }
 
     /// <summary>A read that failed another way.</summary>
     /// <param name="failure">Why.</param>
     /// <returns>The read.</returns>
-    public static ControlRead Failed(ControlFailure failure)
+    public static ControlRead Failed(string failure)
     {
         return new ControlRead(null, Failure: failure);
     }
@@ -80,7 +39,7 @@ internal readonly record struct ControlRead(
     /// <returns>The read.</returns>
     public static ControlRead Unavailable(GpuReason reason, GpuValue? value = null)
     {
-        return new ControlRead(value, false, reason);
+        return new ControlRead(value, reason);
     }
 }
 
@@ -99,9 +58,8 @@ internal enum WriteStatus
 
 /// <summary>What one write returned.</summary>
 /// <param name="Status">How it ended.</param>
-/// <param name="Failure">Why it did not apply, or null when it did.</param>
-/// <param name="Detail">Plain diagnostic text.</param>
-internal readonly record struct ControlWrite(WriteStatus Status, ControlFailure? Failure = null, string? Detail = null)
+/// <param name="Detail">Why it did not apply, or null when it did.</param>
+internal readonly record struct ControlWrite(WriteStatus Status, string? Detail = null)
 {
     public static ControlWrite Applied { get; } = new(WriteStatus.Applied);
 
@@ -118,17 +76,15 @@ internal readonly record struct ControlWrite(WriteStatus Status, ControlFailure?
 
         return new ControlWrite(
             IgclResult.IsRefusal(result) ? WriteStatus.Refused : WriteStatus.Uncertain,
-            ControlFailure.Driver(result),
             $"The driver answered {IgclResult.Describe(result)} to {what}.");
     }
 
     /// <summary>A write refused before anything changed.</summary>
     /// <param name="detail">Why.</param>
-    /// <param name="kind">Where the refusal came from.</param>
     /// <returns>The write.</returns>
-    public static ControlWrite Refuse(string detail, FailureKind kind = FailureKind.Refused)
+    public static ControlWrite Refuse(string detail)
     {
-        return new ControlWrite(WriteStatus.Refused, new ControlFailure(kind, Detail: detail), detail);
+        return new ControlWrite(WriteStatus.Refused, detail);
     }
 }
 
@@ -148,9 +104,6 @@ internal readonly record struct ControlWrite(WriteStatus Status, ControlFailure?
 /// </remarks>
 internal abstract class IntelControl
 {
-    private static readonly GpuValue True = GpuValue.Boolean(true);
-    private static readonly GpuValue False = GpuValue.Boolean(false);
-
     protected IntelControl(
         GpuDescriptor descriptor,
         IReadOnlyList<EnumMember>? members = null,
@@ -162,8 +115,7 @@ internal abstract class IntelControl
                 ?? (descriptor.ValueKind == GpuValueKind.Integer
                     ? IntegerRange.Linear(descriptor.Minimum ?? 0, descriptor.Maximum ?? 0, descriptor.Step ?? 1)
                     : null);
-        Key = IntelModel.Key(descriptor.CapabilityId, descriptor.InstanceId);
-        Name = $"{descriptor.CapabilityId}[{descriptor.InstanceId}]";
+        Key = DriverIds.Key(descriptor.CapabilityId, descriptor.InstanceId);
     }
 
     /// <summary>The descriptor as published.</summary>
@@ -172,20 +124,8 @@ internal abstract class IntelControl
     /// <summary>The capability id.</summary>
     public string CapabilityId => Descriptor.CapabilityId;
 
-    /// <summary>The instance id.</summary>
-    public string? InstanceId => Descriptor.InstanceId;
-
     /// <summary>The routing key, built once.</summary>
     public string Key { get; }
-
-    /// <summary>The name trace lines use, built once.</summary>
-    public string Name { get; }
-
-    /// <summary>
-    ///     The driver structure a support probe exercises. Controls sharing a structure share the key, so the
-    ///     plugin probes it once and keeps that one outcome.
-    /// </summary>
-    public virtual string SupportKey => Key;
 
     /// <summary>The offered members of a choice, in offer order; empty for other kinds.</summary>
     public IReadOnlyList<EnumMember> Members { get; }
@@ -196,17 +136,6 @@ internal abstract class IntelControl
     /// <summary>Reads the current value.</summary>
     /// <returns>The value, or a failed read.</returns>
     public abstract ControlRead Read();
-
-    /// <summary>Checks setter support by returning the exact native state before publishing this control.</summary>
-    /// <param name="admission">
-    ///     Caller cancellation, deadline and live-session admission, checked immediately before any
-    ///     setter.
-    /// </param>
-    /// <returns>The exact-state probe outcome; the base implementation refuses without calling a setter.</returns>
-    public virtual ControlWrite ProbeSupport(WriteAdmission admission)
-    {
-        return ControlWrite.Refuse("No exact-state support probe is implemented for this control.");
-    }
 
     /// <summary>Validates and writes a value.</summary>
     /// <param name="value">The value.</param>
@@ -257,11 +186,11 @@ internal abstract class IntelControl
     /// <returns>How the driver answered.</returns>
     protected abstract ControlWrite WriteValidated(GpuValue value, WriteAdmission admission);
 
-    /// <summary>A published boolean, shared so a read allocates nothing.</summary>
-    /// <param name="value">The boolean.</param>
-    /// <returns>The value.</returns>
-    public static GpuValue Boolean(bool value)
+    /// <summary>The native flag byte of a validated boolean.</summary>
+    /// <param name="value">The boolean value.</param>
+    /// <returns>1 when on, 0 otherwise.</returns>
+    public static byte Flag(GpuValue value)
     {
-        return value ? True : False;
+        return value.BooleanValue == true ? (byte)1 : (byte)0;
     }
 }

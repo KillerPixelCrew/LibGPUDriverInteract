@@ -1,5 +1,6 @@
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
+using LibGPUDriverInteract.Intel.Controls;
 using LibGPUDriverInteract.Runtime;
 using Xunit;
 
@@ -106,7 +107,6 @@ public sealed unsafe class NativeContractTests
         var reference = new AdlxObject(table.Instance);
         var error = Assert.Throws<DriverFailure>(() => AdlxNative.Check(status, "fixture"));
         Assert.True(error.Lost);
-        Assert.Equal(0, reference.Pointer);
         table.Dispose();
         reference.Dispose();
         Assert.Equal(0, _releases);
@@ -312,7 +312,7 @@ public sealed unsafe class NativeContractTests
     [InlineData(181, false)]
     public void SignedColorRangeAndStepAreRevalidated(int value, bool accepted)
     {
-        Assert.Equal(accepted, AdlxSession.Within(value, new AdlxRange { Minimum = -180, Maximum = 180, Step = 5 }));
+        Assert.Equal(accepted, IntegerRange.Linear(minimum: -180, maximum: 180, step: 5).Accepts(value));
     }
 
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvStdcall)])]

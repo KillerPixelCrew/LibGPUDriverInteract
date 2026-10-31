@@ -14,6 +14,7 @@ internal static class ScaledResolutionRegistry
 {
     private const string AmdModes = "DALNonStandardModesBCD";
     private const string AmdRestricted = "DALRestrictedModesBCD";
+    private const string NvidiaModes = "NV_Modes";
     private static readonly Regex NvidiaSize = new(@"(?<![\w])(?<w>\d{3,5})x(?<h>\d{3,5})(?![\d])",
         RegexOptions.CultureInvariant, TimeSpan.FromSeconds(1));
 
@@ -93,9 +94,7 @@ internal static class ScaledResolutionRegistry
             }
             else
             {
-                var value = key.GetValue("NV_Modes", null, RegistryValueOptions.DoNotExpandEnvironmentNames);
-                ValidateNvidiaStorage(value, value is null ? null : key.GetValueKind("NV_Modes"));
-                modes = NvidiaStrings(value).SelectMany(ParseNvidia).Distinct().ToArray();
+                modes = (ReadNvidiaModes(key) ?? []).SelectMany(ParseNvidia).Distinct().ToArray();
             }
 
             return Catalog(true, modes, "Adapter-wide source sizes. Changes require an explicit graphics-driver restart.");
@@ -215,26 +214,27 @@ internal static class ScaledResolutionRegistry
         }
 
         List<Edit> edits = [];
-        var names = AmdNames(key, AmdModes);
-        foreach (var name in names)
+        var lists = AmdNames(key, AmdModes).Select(name => (Name: name, Bytes: ReadBinary(key, name))).ToArray();
+        if (remove)
         {
-            var bytes = ReadBinary(key, name);
-            var changed = EditAmdBytes(bytes, mode, remove);
-            if (!bytes.AsSpan().SequenceEqual(changed))
+            foreach (var list in lists)
             {
-                edits.Add(new Edit(name, changed, RegistryValueKind.Binary));
+                var changed = RemoveAmdBytes(list.Bytes, mode);
+                if (!list.Bytes.AsSpan().SequenceEqual(changed))
+                {
+                    edits.Add(new Edit(list.Name, changed, RegistryValueKind.Binary));
+                }
             }
         }
-
-        if (!remove && !ReadAmd(key, AmdModes).Contains(mode))
+        else if (!lists.Any(list => DecodeAmdList(list.Bytes).Contains(mode)))
         {
             // Append one record without repartitioning or replacing any existing list.
-            var destination = names.FirstOrDefault(name => ReadBinary(key, name).Length is var length
-                && length <= 56 && length % 8 == 0);
+            var existing = lists.FirstOrDefault(list => list.Bytes.Length <= 56 && list.Bytes.Length % 8 == 0);
+            var destination = existing.Name;
             if (destination is null)
             {
                 var index = 1;
-                while (names.Contains(AmdModes + index, StringComparer.OrdinalIgnoreCase))
+                while (lists.Any(list => list.Name.Equals(AmdModes + index, StringComparison.OrdinalIgnoreCase)))
                 {
                     index++;
                 }
@@ -242,20 +242,14 @@ internal static class ScaledResolutionRegistry
                 destination = AmdModes + index;
             }
 
-            edits.Add(new Edit(destination, AddAmdBytes(names.Contains(destination, StringComparer.OrdinalIgnoreCase)
-                ? ReadBinary(key, destination) : [], mode), RegistryValueKind.Binary));
+            edits.Add(new Edit(destination, AddAmdBytes(existing.Bytes ?? [], mode), RegistryValueKind.Binary));
         }
 
         return edits;
     }
 
-    internal static byte[] EditAmdBytes(byte[] bytes, GpuScaledResolution mode, bool remove)
+    internal static byte[] RemoveAmdBytes(byte[] bytes, GpuScaledResolution mode)
     {
-        if (!remove)
-        {
-            return bytes;
-        }
-
         List<byte> kept = [];
         for (var offset = 0; offset < bytes.Length; offset += 8)
         {
@@ -315,16 +309,17 @@ internal static class ScaledResolutionRegistry
 
     private static IReadOnlyList<GpuScaledResolution> ReadAmd(RegistryKey key, string prefix)
     {
+        return AmdNames(key, prefix).SelectMany(name => DecodeAmdList(ReadBinary(key, name))).ToList();
+    }
+
+    private static List<GpuScaledResolution> DecodeAmdList(byte[] bytes)
+    {
         List<GpuScaledResolution> modes = [];
-        foreach (var name in AmdNames(key, prefix))
+        for (var offset = 0; offset + 8 <= bytes.Length; offset += 8)
         {
-            var bytes = ReadBinary(key, name);
-            for (var offset = 0; offset + 8 <= bytes.Length; offset += 8)
+            if (DecodeAmd(bytes.AsSpan(offset, 8)) is { Valid: true } mode)
             {
-                if (DecodeAmd(bytes.AsSpan(offset, 8)) is { Valid: true } mode)
-                {
-                    modes.Add(mode);
-                }
+                modes.Add(mode);
             }
         }
 
@@ -344,15 +339,11 @@ internal static class ScaledResolutionRegistry
         return key.GetValue(name) as byte[] ?? throw new InvalidDataException(name + " is not a binary source-mode list.");
     }
 
-    private static IEnumerable<string> NvidiaStrings(object? value)
+    private static string[]? ReadNvidiaModes(RegistryKey key)
     {
-        return value switch
-        {
-            null => [],
-            string text => [text],
-            string[] texts => texts,
-            _ => throw new InvalidDataException("NV_Modes has an unknown registry type; it was preserved.")
-        };
+        var value = key.GetValue(NvidiaModes, null, RegistryValueOptions.DoNotExpandEnvironmentNames);
+        ValidateNvidiaStorage(value, value is null ? null : key.GetValueKind(NvidiaModes));
+        return (string[]?)value;
     }
 
     internal static IReadOnlyList<GpuScaledResolution> ParseNvidia(string text)
@@ -364,9 +355,8 @@ internal static class ScaledResolutionRegistry
 
     private static List<Edit> EditNvidia(RegistryKey key, GpuScaledResolution mode, bool remove)
     {
-        var raw = key.GetValue("NV_Modes", null, RegistryValueOptions.DoNotExpandEnvironmentNames);
-        ValidateNvidiaStorage(raw, raw is null ? null : key.GetValueKind("NV_Modes"));
-        var texts = NvidiaStrings(raw).ToArray();
+        var stored = ReadNvidiaModes(key);
+        var texts = stored ?? [];
         if (texts.SelectMany(ParseNvidia).Contains(mode) == !remove)
         {
             return [];
@@ -380,7 +370,7 @@ internal static class ScaledResolutionRegistry
         {
             // A new independent all-output source-size group leaves every existing group's qualifiers intact.
             // Seed the driver's documented base list when NV_Modes is absent, preserving those existing defaults.
-            if (raw is null)
+            if (stored is null)
             {
                 texts = ["{*}SHV 1600x1200 1280x1024 1024x768 800x600 640x480=1"];
             }
@@ -388,7 +378,7 @@ internal static class ScaledResolutionRegistry
             texts = [.. texts, $"{{*}}SHV {mode.Width}x{mode.Height}=1"];
         }
 
-        return [new Edit("NV_Modes", texts, RegistryValueKind.MultiString)];
+        return [new Edit(NvidiaModes, texts, RegistryValueKind.MultiString)];
     }
 
     internal static string EditNvidiaText(string text, GpuScaledResolution mode)

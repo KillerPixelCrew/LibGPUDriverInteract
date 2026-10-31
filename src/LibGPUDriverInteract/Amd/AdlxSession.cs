@@ -151,7 +151,7 @@ internal sealed unsafe partial class AdlxSession : IDriverSession
                             string? sourceName = null;
                             Try(instance + "/windows-route", () =>
                             {
-                                if (_mapping != 0 && _dither is not null)
+                                if (_dither is not null)
                                 {
                                     var mapped = AdlIds(display.Pointer);
                                     sourceName = _dither.SourceName(mapped.Adapter, mapped.Display);
@@ -255,14 +255,7 @@ internal sealed unsafe partial class AdlxSession : IDriverSession
 
     private void Try(string key, Action action)
     {
-        try
-        {
-            action();
-        }
-        catch (Exception error) when (error is not DriverFailure { Lost: true })
-        {
-            _report(key, error.Message);
-        }
+        DriverLog.Try(_report, key, action);
     }
 
     private static void Release(List<AdlxObject> objects)
@@ -273,23 +266,6 @@ internal sealed unsafe partial class AdlxSession : IDriverSession
         }
 
         objects.Clear();
-    }
-}
-
-internal sealed class AdlxControl(
-    GpuDescriptor descriptor,
-    Func<GpuValue> read,
-    Action<GpuValue, WriteAdmission> write)
-    : DriverControl(descriptor)
-{
-    internal override GpuValue Read()
-    {
-        return read();
-    }
-
-    internal override void Write(GpuValue value, WriteAdmission admission)
-    {
-        write(value, admission);
     }
 }
 

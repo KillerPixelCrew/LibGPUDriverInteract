@@ -126,25 +126,17 @@ public sealed partial class GpuDriver : IAsyncDisposable
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(command);
-        if (!await EnterCommandAsync(cancellationToken).ConfigureAwait(false))
-        {
-            return CommandResults.Rejected(command, GpuReasonCode.Quiescing,
-                "Driver admission is closed or the command was cancelled before dispatch.", true);
-        }
-
         try
         {
-            return await Task.Run(() => _runtime.Execute(command, cancellationToken), CancellationToken.None)
-                .ConfigureAwait(false);
+            return await OnLaneAsync(() => _runtime.Execute(command, cancellationToken),
+                () => CommandResults.Rejected(GpuReasonCode.Quiescing,
+                    "Driver admission is closed or the command was cancelled before dispatch.", retryable: true),
+                cancellationToken).ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
-            return CommandResults.Rejected(command, GpuReasonCode.Quiescing,
-                "The command was cancelled before dispatch.", true);
-        }
-        finally
-        {
-            _lane.Release();
+            return CommandResults.Rejected(GpuReasonCode.Quiescing, "The command was cancelled before dispatch.",
+                retryable: true);
         }
     }
 
@@ -153,30 +145,25 @@ public sealed partial class GpuDriver : IAsyncDisposable
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(sync);
-        if (!await EnterCommandAsync(cancellationToken).ConfigureAwait(false))
-        {
-            return DriverRuntime.SyncUnavailable(sync, "Driver admission is closed or profile sync was cancelled.");
-        }
-
         try
         {
-            var detached = sync with
-            {
-                Profiles = sync.Profiles.Select(profile => profile with
+            return await OnLaneAsync(() =>
                 {
-                    Executables = profile.Executables.ToArray(), Values = profile.Values.ToArray()
-                }).ToArray()
-            };
-            return await Task.Run(() => _runtime.Sync(detached, cancellationToken), CancellationToken.None)
-                .ConfigureAwait(false);
+                    var detached = sync with
+                    {
+                        Profiles = sync.Profiles.Select(profile => profile with
+                        {
+                            Executables = profile.Executables.ToArray(), Values = profile.Values.ToArray()
+                        }).ToArray()
+                    };
+                    return _runtime.Sync(detached, cancellationToken);
+                },
+                () => DriverRuntime.SyncUnavailable(sync, "Driver admission is closed or profile sync was cancelled."),
+                cancellationToken).ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
             return DriverRuntime.SyncUnavailable(sync, "Profile synchronization was cancelled.");
-        }
-        finally
-        {
-            _lane.Release();
         }
     }
 
@@ -184,15 +171,24 @@ public sealed partial class GpuDriver : IAsyncDisposable
     /// <remarks>A lost session reopens here or on the next explicit command, never on a polling pass.</remarks>
     public async ValueTask RefreshTopologyAsync(CancellationToken cancellationToken = default)
     {
-        if (!await EnterCommandAsync(cancellationToken).ConfigureAwait(false))
+        await OnLaneAsync(() =>
         {
-            return;
+            _runtime.RefreshTopology(cancellationToken);
+            return true;
+        }, () => false, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>Runs one native call on the serialized lane, or answers <paramref name="closed" /> instead.</summary>
+    private async ValueTask<T> OnLaneAsync<T>(Func<T> work, Func<T> closed, CancellationToken token)
+    {
+        if (!await EnterCommandAsync(token).ConfigureAwait(false))
+        {
+            return closed();
         }
 
         try
         {
-            await Task.Run(() => _runtime.RefreshTopology(cancellationToken), CancellationToken.None)
-                .ConfigureAwait(false);
+            return await Task.Run(work, CancellationToken.None).ConfigureAwait(false);
         }
         finally
         {
@@ -221,8 +217,7 @@ public sealed partial class GpuDriver : IAsyncDisposable
             }
 
             _sink.ReportHealth(GpuHealth.Unavailable, "The driver is starting.");
-            var health = await Task.Run(() => _runtime.Start(_sink, _stateDirectory, () => _active,
-                cancellation.Token), CancellationToken.None).ConfigureAwait(false);
+            var health = _runtime.Start(_sink, _stateDirectory, () => _active, cancellation.Token);
             lock (_stateGate)
             {
                 if (_active)
@@ -236,13 +231,13 @@ public sealed partial class GpuDriver : IAsyncDisposable
         catch (OperationCanceledException) when (cancellation.IsCancellationRequested)
         {
             _active = false;
-            await Task.Run(_runtime.Close, CancellationToken.None).ConfigureAwait(false);
+            _runtime.Close();
             return GpuHealth.Unavailable;
         }
         catch (Exception error) when (error is not OutOfMemoryException)
         {
             _active = false;
-            await Task.Run(_runtime.Close, CancellationToken.None).ConfigureAwait(false);
+            _runtime.Close();
             _sink.ReportHealth(GpuHealth.Failed, "Driver startup failed: " + error.Message);
             return GpuHealth.Failed;
         }
@@ -263,46 +258,41 @@ public sealed partial class GpuDriver : IAsyncDisposable
             }
 
             _cancellation?.Cancel();
-            if (_stop is null || _stopCancellation != _cancellation)
+            var startup = _startup;
+            var observation = _observation;
+            var cancellation = _stopCancellation = _cancellation;
+            _stop = Task.Run(async () =>
             {
-                var startup = _startup;
-                var observation = _observation;
-                var cancellation = _stopCancellation = _cancellation;
-                _stop = Task.Run(async () =>
+                if (startup is not null)
                 {
-                    if (startup is not null)
-                    {
-                        await startup.ConfigureAwait(false);
-                    }
+                    await startup.ConfigureAwait(false);
+                }
 
-                    if (observation is not null)
-                    {
-                        await observation.ConfigureAwait(false);
-                    }
+                if (observation is not null)
+                {
+                    await observation.ConfigureAwait(false);
+                }
 
-                    await _lane.WaitAsync(CancellationToken.None).ConfigureAwait(false);
-                    try
-                    {
-                        await Task.Run(_runtime.Close, CancellationToken.None).ConfigureAwait(false);
-                    }
-                    finally
-                    {
-                        _sink.PublishDescriptorsAsync(new GpuDescriptorSet(), CancellationToken.None)
-                            .GetAwaiter().GetResult();
-                        _sink.ReportHealth(GpuHealth.Unavailable, "The driver is stopped.");
-                        cancellation?.Dispose();
-                        _lane.Release();
-                    }
-                }, CancellationToken.None);
-            }
-
+                await _lane.WaitAsync(CancellationToken.None).ConfigureAwait(false);
+                try
+                {
+                    _runtime.Close();
+                }
+                finally
+                {
+                    _sink.PublishDescriptors(new GpuDescriptorSet());
+                    _sink.ReportHealth(GpuHealth.Unavailable, "The driver is stopped.");
+                    cancellation?.Dispose();
+                    _lane.Release();
+                }
+            }, CancellationToken.None);
             return _stop;
         }
     }
 
     private async ValueTask<bool> EnterCommandAsync(CancellationToken token)
     {
-        if (!_active || _disposed || token.IsCancellationRequested)
+        if (!_active || token.IsCancellationRequested)
         {
             return false;
         }
@@ -316,7 +306,7 @@ public sealed partial class GpuDriver : IAsyncDisposable
             return false;
         }
 
-        if (_active && !_disposed && !token.IsCancellationRequested)
+        if (_active && !token.IsCancellationRequested)
         {
             return true;
         }
@@ -337,7 +327,7 @@ public sealed partial class GpuDriver : IAsyncDisposable
                 {
                     if (_active)
                     {
-                        await Task.Run(() => _runtime.Observe(token), CancellationToken.None).ConfigureAwait(false);
+                        _runtime.Observe(token);
                     }
                 }
                 finally
@@ -389,9 +379,8 @@ public sealed partial class GpuDriver : IAsyncDisposable
 
     private sealed class Sink(GpuDriver owner) : IDriverSink
     {
-        public ValueTask PublishDescriptorsAsync(GpuDescriptorSet set, CancellationToken token)
+        public void PublishDescriptors(GpuDescriptorSet set)
         {
-            token.ThrowIfCancellationRequested();
             if (owner._active || set.Descriptors.Count == 0)
             {
                 owner.Notify(owner.DescriptorsChanged, set with
@@ -406,19 +395,14 @@ public sealed partial class GpuDriver : IAsyncDisposable
                     }).ToArray())
                 });
             }
-
-            return ValueTask.CompletedTask;
         }
 
-        public ValueTask PublishCapabilityStateAsync(GpuState state, CancellationToken token)
+        public void PublishCapabilityState(GpuState state)
         {
-            token.ThrowIfCancellationRequested();
             if (owner._active)
             {
                 owner.Notify(owner.StateChanged, state);
             }
-
-            return ValueTask.CompletedTask;
         }
 
         public void ReportHealth(GpuHealth health, string detail)

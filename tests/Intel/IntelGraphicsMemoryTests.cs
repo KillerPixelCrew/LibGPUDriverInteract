@@ -80,7 +80,7 @@ public sealed class IntelGraphicsMemoryTests
     {
         WriteAdapter("0001", "Intel Corporation", "32.0.101.8992", 57);
 
-        IntelGraphicsMemoryTransport transport = new(_hive, ClassPath, 8UL * 1024 * 1024 * 1024);
+        IntelGraphicsMemoryTransport transport = new(_hive, 8UL * 1024 * 1024 * 1024, Adapters());
 
         Assert.False(transport.IsAvailable);
     }
@@ -227,51 +227,14 @@ public sealed class IntelGraphicsMemoryTests
         Assert.Equal(44, transport.Read());
     }
 
-    [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public void SupportProbeRemainsAcceptedAfterDifferentOrFailedReadback(bool fails)
-    {
-        WriteAdapter("0001", "Intel Corporation", "32.0.101.8992", 44);
-        var transport = Open();
-        var memory = _hive.Create($@"{ClassPath}\0001\GMM");
-        memory.AfterSetDWord = () => memory.ReadValue = (_, _) =>
-            fails ? throw new IOException("Fixture read failure.") : 57;
-        Assert.True(transport.ProbeSupport(Admission));
-        memory.ReadValue = null;
-        Assert.Equal(44, transport.Read());
-    }
-
-    [Fact]
-    public void RefusedRegistrySetterStillRefusesTheSupportProbe()
-    {
-        WriteAdapter("0001", "Intel Corporation", "32.0.101.8992", 44);
-        var transport = Open();
-        _hive.Create($@"{ClassPath}\0001\GMM").BeforeSetDWord = () => throw new UnauthorizedAccessException();
-        Assert.False(transport.ProbeSupport(Admission));
-        Assert.Equal(44, transport.Read());
-    }
-
-    [Fact]
-    public void SupportProbePreservesAnAbsentOverride()
-    {
-        WriteBareAdapter("0001");
-        Assert.True(Open().ProbeSupport(Admission));
-        using var adapter = _hive.OpenSubKey($@"{ClassPath}\0001");
-        Assert.Null(adapter!.OpenSubKey("GMM"));
-    }
-
-    [Fact]
-    public void SupportProbePreservesTheExactStoredPercentage()
-    {
-        WriteAdapter("0001", "Intel Corporation", "32.0.101.8992", 44);
-        Assert.True(Open().ProbeSupport(Admission));
-        Assert.Equal(44, Open().Read());
-    }
-
     private IntelGraphicsMemoryTransport Open()
     {
-        return new IntelGraphicsMemoryTransport(_hive, ClassPath, ThirtyTwoGigabytes);
+        return new IntelGraphicsMemoryTransport(_hive, ThirtyTwoGigabytes, Adapters());
+    }
+
+    private IReadOnlyList<AdapterClassEntry> Adapters()
+    {
+        return AdapterClassKey.Enumerate(_hive, ClassPath, DriverLog.None);
     }
 
     private void WriteBareAdapter(string index)

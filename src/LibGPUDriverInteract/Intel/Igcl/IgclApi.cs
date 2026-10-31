@@ -104,7 +104,7 @@ internal sealed unsafe class IgclApi : IDisposable
     {
         if (!SystemLibrary.TryLoad("ControlLib.dll", out var library))
         {
-            log.Change(GpuLogLevel.Info, "igcl", "library",
+            log.LogChange(GpuLogLevel.Info, "igcl", "library",
                 "ControlLib.dll is not present; the Intel driver is not installed.");
             return null;
         }
@@ -112,7 +112,7 @@ internal sealed unsafe class IgclApi : IDisposable
         IgclApi api = new(library);
         if (api.TryBind(log, name => NativeLibrary.TryGetExport(library, name, out var address) ? address : 0))
         {
-            log.Change(GpuLogLevel.Info, "igcl", "library", "ControlLib.dll is loaded.");
+            log.LogChange(GpuLogLevel.Info, "igcl", "library", "ControlLib.dll is loaded.");
             return api;
         }
 
@@ -205,7 +205,7 @@ internal sealed unsafe class IgclApi : IDisposable
                 return true;
             }
 
-            log.Change(GpuLogLevel.Warn, "igcl", "library", $"ControlLib.dll lacks {name}.");
+            log.LogChange(GpuLogLevel.Warn, "igcl", "library", $"ControlLib.dll lacks {name}.");
             return false;
         }
 

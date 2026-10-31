@@ -13,8 +13,6 @@ internal sealed record AdlxGraphicsFeature(
     string? ServiceInterface = null,
     string? FeatureInterface = null)
 {
-    private readonly long _epoch = AdlxNative.Epoch;
-
     internal T Use<T>(Func<AdlxObject, T> operation)
     {
         return TryUse(operation, out var result) ? result
@@ -24,11 +22,6 @@ internal sealed record AdlxGraphicsFeature(
     internal bool TryUse<T>(Func<AdlxObject, T> operation, out T result)
     {
         result = default!;
-        if (_epoch != AdlxNative.Epoch)
-        {
-            throw new DriverFailure("The AMD graphics session has retired.");
-        }
-
         using var service = AdlxNative.Interface(System, 7);
         using var versioned = ServiceInterface is null ? null : AdlxNative.Query(service.Pointer, ServiceInterface);
         if (ServiceInterface is not null && versioned is null)
@@ -45,14 +38,5 @@ internal sealed record AdlxGraphicsFeature(
 
         result = operation(extended ?? feature);
         return true;
-    }
-
-    internal bool HasInterface(string name)
-    {
-        return Use(feature =>
-        {
-            using var queried = AdlxNative.Query(feature.Pointer, name);
-            return queried is not null;
-        });
     }
 }

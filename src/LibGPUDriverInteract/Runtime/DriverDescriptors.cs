@@ -42,17 +42,15 @@ internal static class DriverDescriptors
             return false;
         }
 
+        var bounds = range ?? (descriptor is { Minimum: { } minimum, Maximum: { } maximum }
+            ? IntegerRange.Linear(minimum, maximum, descriptor.Step ?? 1)
+            : (IntegerRange?)null);
         return value.Kind switch
         {
             GpuValueKind.Boolean => value.BooleanValue is not null,
             GpuValueKind.Choice => descriptor.Choices.Any(choice => choice.Value == value.ChoiceValue),
-            GpuValueKind.Integer when range is { } nativeRange => value.IntegerValue is { } integer
-                                                                  && nativeRange.Accepts(integer),
-            GpuValueKind.Integer => value.IntegerValue is { } number && descriptor.Minimum is { } minimum
-                                                                     && descriptor.Maximum is { } maximum &&
-                                                                     number >= minimum && number <= maximum
-                                                                     && (number - minimum) % (descriptor.Step ?? 1) ==
-                                                                     0,
+            GpuValueKind.Integer => value.IntegerValue is { } integer && bounds is { } limits
+                                                                      && limits.Accepts(integer),
             _ => false
         };
     }
@@ -69,33 +67,23 @@ internal static class DriverDescriptors
     internal static GpuDescriptor Toggle(string id, string instance, string label, string section,
         GpuProfileScope scope)
     {
-        return Toggle(id, instance, label, new Placement(section, null, 0, scope,
-            scope == GpuProfileScope.NativePerApplication
-                ? GpuApplyTiming.NextApplicationStart
-                : GpuApplyTiming.Immediate));
+        return Toggle(id, instance, label, At(section, scope));
     }
 
     internal static GpuDescriptor Choice(string id, string? instance, string label, string section,
         GpuProfileScope scope, IEnumerable<(string Id, string Label)> options)
     {
-        return Base(id, instance, label, new Placement(section, null, 0, scope,
-                    scope == GpuProfileScope.NativePerApplication
-                        ? GpuApplyTiming.NextApplicationStart
-                        : GpuApplyTiming.Immediate),
-                GpuRole.Choice, GpuValueKind.Choice) with
-            {
-                Choices = options.Select(option => new GpuChoice(option.Id, Label(option.Label))).ToArray()
-            };
+        return Base(id, instance, label, At(section, scope), GpuRole.Choice, GpuValueKind.Choice) with
+        {
+            Choices = options.Select(option => new GpuChoice(option.Id, Label(option.Label))).ToArray()
+        };
     }
 
     internal static GpuDescriptor Range(string id, string instance, string label, string section,
         GpuProfileScope scope, int minimum, int maximum, int step)
     {
         return Range(id, instance, label, IntegerRange.Linear(minimum, maximum, step), GpuUnit.None,
-            new Placement(section, null, 0, scope,
-                scope == GpuProfileScope.NativePerApplication
-                    ? GpuApplyTiming.NextApplicationStart
-                    : GpuApplyTiming.Immediate));
+            At(section, scope));
     }
 
     internal static GpuDescriptor ReadOnly(string id, string instance, string label, string section,
@@ -213,6 +201,15 @@ internal static class DriverDescriptors
     public static string Label(string? name, string fallback)
     {
         return name is null || Label(name) is not { Length: > 0 } label ? fallback : label;
+    }
+
+    /// <summary>The first row of a section; native per-application values take effect at the next start.</summary>
+    private static Placement At(string section, GpuProfileScope scope)
+    {
+        return new Placement(section, CategoryId: null, Order: 0, scope,
+            scope == GpuProfileScope.NativePerApplication
+                ? GpuApplyTiming.NextApplicationStart
+                : GpuApplyTiming.Immediate);
     }
 
     private static GpuDescriptor ReadOnly(GpuDescriptor descriptor)

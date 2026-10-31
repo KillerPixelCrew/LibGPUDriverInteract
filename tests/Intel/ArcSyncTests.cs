@@ -18,11 +18,15 @@ public sealed class ArcSyncTests
     {
         var bounds = ArcSyncBounds.From(Monitor(29.97f, 120f, 5000, 5000))!.Value;
 
-        Assert.Equal((30, 120), bounds.RangeOf(ArcSyncField.MinimumHz));
-        Assert.Equal((30, 120), bounds.RangeOf(ArcSyncField.MaximumHz));
+        var minimum = bounds.RangeOf(ArcSyncField.MinimumHz);
+        var maximum = bounds.RangeOf(ArcSyncField.MaximumHz);
+        var increase = bounds.RangeOf(ArcSyncField.FrameTimeIncrease);
+
+        Assert.Equal((30, 120), (minimum.Minimum, minimum.Maximum));
+        Assert.Equal((30, 120), (maximum.Minimum, maximum.Maximum));
 
         // The frame time span of 30-120 Hz: 33,333 us down to 8,333 us.
-        Assert.Equal((0, 25000), bounds.RangeOf(ArcSyncField.FrameTimeIncrease));
+        Assert.Equal((0, 25000), (increase.Minimum, increase.Maximum));
     }
 
     [Fact]
@@ -63,7 +67,7 @@ public sealed class ArcSyncTests
         profile.MaxFrameTimeIncreaseUs = 5000;
         profile.MaxFrameTimeDecreaseUs = 6000;
 
-        var written = ArcSyncBounds.Apply(profile, ArcSyncField.FrameTimeDecrease, 7000);
+        var written = ArcSyncField.FrameTimeDecrease.With(profile, 7000);
 
         Assert.Equal((40f, 100f, 5000u, 7000u),
             (written.MinimumHz, written.MaximumHz, written.MaxFrameTimeIncreaseUs, written.MaxFrameTimeDecreaseUs));

@@ -198,11 +198,11 @@ internal static unsafe class SharpnessControls
             new FieldControl<CtlSharpnessSettings>(
                 source,
                 DriverDescriptors.Toggle("display.sharpening", instance, "Display sharpening", placement),
-                static (_, settings) => ControlRead.Of(IntelControl.Boolean(settings.Enable != 0)),
+                static (_, settings) => ControlRead.Of(GpuValue.Boolean(settings.Enable != 0)),
                 (_, current, known, value) =>
                 {
                     var request = Carried(current, known, supported, fallback);
-                    request.Enable = value.BooleanValue == true ? (byte)1 : (byte)0;
+                    request.Enable = IntelControl.Flag(value);
                     return request;
                 },
                 true)
@@ -328,11 +328,7 @@ internal static unsafe class WireFormatControl
         CtlWireFormatConfig request = default;
         request.Operation = OperationGet;
         IgclSource<CtlWireFormatConfig> source = new(session, output.Handle, api.GetSetWireFormat,
-            api.GetSetWireFormat, request, static current =>
-            {
-                current.Operation = OperationSet;
-                return current;
-            });
+            api.GetSetWireFormat, request);
         if (source.Read(out var config) != IgclResult.Success)
         {
             return null;
@@ -473,12 +469,7 @@ internal static unsafe class DisplaySettingControls
         }
 
         IgclSource<CtlDisplaySettings> source = new(session, output.Handle, api.GetSetDisplaySettings,
-            api.GetSetDisplaySettings, default, static current =>
-            {
-                current.Set = 1;
-                current.ValidFlags &= current.ControllableFlags;
-                return current;
-            });
+            api.GetSetDisplaySettings, default);
         if (source.Read(out var settings) != IgclResult.Success)
         {
             return [];

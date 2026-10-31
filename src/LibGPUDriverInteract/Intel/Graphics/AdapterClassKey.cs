@@ -18,8 +18,7 @@ internal sealed record AdapterClassEntry(string Path, string? MatchingDeviceId);
 internal static class AdapterClassKey
 {
     /// <summary>The display adapter class below HKLM.</summary>
-    public const string ClassPath =
-        @"SYSTEM\CurrentControlSet\Control\Class\{4d36e968-e325-11ce-bfc1-08002be10318}";
+    public const string ClassPath = @"SYSTEM\CurrentControlSet\Control\Class\" + WindowsGpuVendors.DisplayClass;
 
     /// <summary>Lists the adapters: every four-digit subkey, with its <c>MatchingDeviceId</c>.</summary>
     /// <param name="root">The hive.</param>

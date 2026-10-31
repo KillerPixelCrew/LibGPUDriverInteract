@@ -41,7 +41,7 @@ public sealed class NvProfilesTests
         Assert.Equal(new nint[] { 10 }, api.DeletedProfiles);
         Assert.Equal(6, api.NamedProfiles.Count);
         Assert.Equal(1, api.Saves);
-        Assert.True(DriverStateFile.Read(Path.Combine(directory.Root, "nvidia-profiles.v1.json"),
+        Assert.True(DriverStateFile.Read(JournalPath(directory),
             new NvProfileJournal([])).LegacyProfilesRemoved);
         // No profile sync or NvSettingControl was created: cleanup is independent of descriptor discovery.
     }
@@ -69,7 +69,7 @@ public sealed class NvProfilesTests
         var old = "WSGM 0123456789abcdefABCDEF01";
         api.NamedProfiles[10] = old;
         var unrelated = new NvOwnedSetting("Native game", Setting, "game.exe", "game", 7, true, 9);
-        var path = Path.Combine(directory.Root, "nvidia-profiles.v1.json");
+        var path = JournalPath(directory);
         DriverStateFile.Write(path, new NvProfileJournal([
             unrelated,
             new NvOwnedSetting(old, Setting, "old.exe", "old", 7, true, 9)
@@ -90,14 +90,14 @@ public sealed class NvProfilesTests
         api.NamedProfiles[10] = "WSGM 0123456789abcdefABCDEF01";
         Assert.Throws<DriverFailure>(() =>
             new NvProfiles(api, directory.Root, Ignore).Initialize(Admitted, CancellationToken.None));
-        Assert.False(File.Exists(Path.Combine(directory.Root, "nvidia-profiles.v1.json")));
+        Assert.False(File.Exists(JournalPath(directory)));
         api.FailSave = false;
         api.FailAfterSave = false;
         new NvProfiles(api, directory.Root, Ignore).Initialize(Admitted, CancellationToken.None);
         Assert.Empty(api.NamedProfiles);
         Assert.Equal(committed ? 1 : 2, api.Saves);
         Assert.True(DriverStateFile
-            .Read(Path.Combine(directory.Root, "nvidia-profiles.v1.json"), new NvProfileJournal([]))
+            .Read(JournalPath(directory), new NvProfileJournal([]))
             .LegacyProfilesRemoved);
     }
 
@@ -105,7 +105,7 @@ public sealed class NvProfilesTests
     public void CorruptOwnershipJournalSuppressesCleanupAndPreservesAllNativeProfilesAndRecordBytes()
     {
         using var directory = new TemporaryDirectory();
-        var path = Path.Combine(directory.Root, "nvidia-profiles.v1.json");
+        var path = JournalPath(directory);
         File.WriteAllText(path, "corrupt ownership");
         var api = new Drs();
         api.NamedProfiles[10] = "WSGM 0123456789abcdefABCDEF01";
@@ -215,7 +215,7 @@ public sealed class NvProfilesTests
         var api = new Drs { FailSave = true };
         var profiles = new NvProfiles(api, directory.Root, Ignore);
         Assert.Single(profiles.Sync(Sync(1, 9), Controls(api), Admitted, CancellationToken.None).Failures);
-        Assert.False(Assert.Single(DriverStateFile.Read(Path.Combine(directory.Root, "nvidia-profiles.v1.json"),
+        Assert.False(Assert.Single(DriverStateFile.Read(JournalPath(directory),
             new NvProfileJournal([])).Entries).OriginalExplicit);
         api.FailSave = false;
         Assert.Empty(profiles.Sync(Sync(2, 9), Controls(api), Admitted, CancellationToken.None).Failures);
@@ -235,7 +235,7 @@ public sealed class NvProfilesTests
         Assert.Empty(profiles.Sync(Sync(2, 9), Controls(api), Admitted, CancellationToken.None).Failures);
         Assert.Equal(1, api.Saves);
         Assert.Equal(9u, api.Values[Setting]);
-        Assert.Equal(7u, Assert.Single(DriverStateFile.Read(Path.Combine(directory.Root, "nvidia-profiles.v1.json"),
+        Assert.Equal(7u, Assert.Single(DriverStateFile.Read(JournalPath(directory),
             new NvProfileJournal([])).Entries).Original);
         profiles.Sync(Empty(3), Controls(api), Admitted, CancellationToken.None);
         Assert.Equal(7u, api.Values[Setting]);
@@ -266,7 +266,7 @@ public sealed class NvProfilesTests
         api.Values[Setting] = 7;
         var profiles = new NvProfiles(api, directory.Root, Ignore);
         profiles.Sync(Sync(1, 9), Controls(api), Admitted, CancellationToken.None);
-        var path = Path.Combine(directory.Root, "nvidia-profiles.v1.json");
+        var path = JournalPath(directory);
         using (var locked = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.None))
         {
             Assert.Single(profiles.Sync(Empty(2), Controls(api), Admitted, CancellationToken.None).Failures);
@@ -321,7 +321,7 @@ public sealed class NvProfilesTests
     public void CorruptJournalFailsEverySyncWithoutReplacingIt(string content)
     {
         using var directory = new TemporaryDirectory();
-        var path = Path.Combine(directory.Root, "nvidia-profiles.v1.json");
+        var path = JournalPath(directory);
         File.WriteAllText(path, content);
         var api = new Drs();
         var reports = new List<string>();
@@ -343,7 +343,7 @@ public sealed class NvProfilesTests
     public void EmptyDesiredSetWithAnUnreadableJournalCannotClaimSuccessfulRemoval()
     {
         using var directory = new TemporaryDirectory();
-        var path = Path.Combine(directory.Root, "nvidia-profiles.v1.json");
+        var path = JournalPath(directory);
         File.WriteAllText(path, "broken");
         var api = new Drs();
         var failure = Assert.Single(new NvProfiles(api, directory.Root, Ignore)
@@ -359,7 +359,7 @@ public sealed class NvProfilesTests
     {
         using var directory = new TemporaryDirectory();
         var api = new Drs { ApplicationExists = false, Global = 7 };
-        var path = Path.Combine(directory.Root, "nvidia-profiles.v1.json");
+        var path = JournalPath(directory);
 
         void CheckIntent()
         {
@@ -416,7 +416,7 @@ public sealed class NvProfilesTests
         using var directory = new TemporaryDirectory();
         var api = new Drs { ApplicationExists = false };
         var profiles = new NvProfiles(api, directory.Root, Ignore);
-        var path = Path.Combine(directory.Root, "nvidia-profiles.v1.json");
+        var path = JournalPath(directory);
         DriverStateFile.Write(path, new NvProfileJournal([]));
         using (var locked = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.None))
         {
@@ -427,6 +427,11 @@ public sealed class NvProfilesTests
         Assert.Equal(0, api.ApplicationCreations);
         Assert.Equal(0, api.Saves);
         Assert.Empty(DriverStateFile.Read(path, new NvProfileJournal([])).Entries);
+    }
+
+    private static string JournalPath(TemporaryDirectory directory)
+    {
+        return directory.GetPath("nvidia-profiles.v1.json");
     }
 
     private static GpuProfileSync Sync(long revision, uint value)

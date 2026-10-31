@@ -37,6 +37,24 @@ internal abstract class DriverControl(GpuDescriptor descriptor)
     }
 }
 
+/// <summary>A control whose read and write are plain delegates over the vendor session.</summary>
+internal sealed class DelegateControl(
+    GpuDescriptor descriptor,
+    Func<GpuValue> read,
+    Action<GpuValue, WriteAdmission> write)
+    : DriverControl(descriptor)
+{
+    internal override GpuValue Read()
+    {
+        return read();
+    }
+
+    internal override void Write(GpuValue value, WriteAdmission admission)
+    {
+        write(value, admission);
+    }
+}
+
 /// <summary>Discovery, observations and sticky written state shared by all three driver sessions.</summary>
 /// <remarks>GpuDriver owns serialization and lifetime. This class has no separate gate, loop or retirement task.</remarks>
 internal sealed partial class DriverRuntime(string id, Func<string, IDriverSink, IDriverSession> open)
@@ -186,20 +204,20 @@ internal sealed partial class DriverRuntime(string id, Func<string, IDriverSink,
 
         if (_session is not { } session)
         {
-            return CommandResults.Rejected(command, GpuReasonCode.DriverUnavailable, "The GPU driver is not open.");
+            return CommandResults.Rejected(GpuReasonCode.DriverUnavailable, "The GPU driver is not open.");
         }
 
         var control = _model.Controls.FirstOrDefault(item => item.Descriptor.CapabilityId == command.CapabilityId
                                                              && item.Descriptor.InstanceId == command.InstanceId);
         if (control is null)
         {
-            return CommandResults.Rejected(command, GpuReasonCode.Unsupported,
+            return CommandResults.Rejected(GpuReasonCode.Unsupported,
                 $"{command.CapabilityId} is not published for {command.InstanceId}.");
         }
 
         if (!control.Accepts(command.RequestedValue))
         {
-            return CommandResults.Rejected(command, GpuReasonCode.ValueOutOfRange,
+            return CommandResults.Rejected(GpuReasonCode.ValueOutOfRange,
                 "The value is not offered by this GPU control.");
         }
 
@@ -217,46 +235,30 @@ internal sealed partial class DriverRuntime(string id, Func<string, IDriverSink,
             {
                 Lose(failure.Message);
                 return failure.Attempted
-                    ? CommandResults.Indeterminate(command, GpuReasonCode.TransportFaulted, failure.Message)
-                    : CommandResults.Rejected(command, GpuReasonCode.DriverUnavailable, failure.Message);
+                    ? CommandResults.Indeterminate(GpuReasonCode.TransportFaulted, failure.Message)
+                    : CommandResults.Rejected(GpuReasonCode.DriverUnavailable, failure.Message);
             }
 
             return failure.Attempted
-                ? Settle(command, control, requested, failure.Message, token)
-                : CommandResults.Rejected(command,
-                    !admission.Admitted ? GpuReasonCode.Quiescing : GpuReasonCode.Unsupported, failure.Message);
+                ? Settle(control, requested, failure.Message, token)
+                : CommandResults.Rejected(!admission.Admitted ? GpuReasonCode.Quiescing : GpuReasonCode.Unsupported,
+                    failure.Message);
         }
         catch (OperationCanceledException) when (token.IsCancellationRequested)
         {
-            return CommandResults.Rejected(command, GpuReasonCode.Quiescing,
-                "The command was cancelled before dispatch.", true);
+            return CommandResults.Rejected(GpuReasonCode.Quiescing, "The command was cancelled before dispatch.",
+                retryable: true);
         }
         catch (Exception failure) when (failure is not OutOfMemoryException)
         {
-            return Settle(command, control, requested, failure.Message, token);
+            return Settle(control, requested, failure.Message, token);
         }
 
         GpuValue? readback = null;
         string? detail = null;
         if (control.Descriptor.SupportsRead)
         {
-            try
-            {
-                session.BeginPass();
-                readback = control.Read();
-            }
-            catch (Exception failure) when (failure is not OutOfMemoryException)
-            {
-                detail = failure.Message;
-                if (failure is DriverFailure { Lost: true })
-                {
-                    Lose(detail);
-                }
-                else
-                {
-                    _sink!.LogChange(GpuLogLevel.Warn, id, "readback/" + control.Key, detail);
-                }
-            }
+            readback = ReadBack(session, control, out detail);
         }
 
         var verified = readback == requested;
@@ -267,7 +269,32 @@ internal sealed partial class DriverRuntime(string id, Func<string, IDriverSink,
                 verified ? GpuStateQuality.Verified : GpuStateQuality.Observed, CancellationToken.None);
         }
 
-        return verified ? CommandResults.Verified(command, readback!) : CommandResults.Unverified(command, detail);
+        return verified ? CommandResults.Verified(readback!) : CommandResults.Unverified(detail);
+    }
+
+    /// <summary>Reads a control back once after a write; a lost session closes, any other failure is logged.</summary>
+    private GpuValue? ReadBack(IDriverSession session, DriverControl control, out string? error)
+    {
+        try
+        {
+            session.BeginPass();
+            error = null;
+            return control.Read();
+        }
+        catch (Exception failure) when (failure is not OutOfMemoryException)
+        {
+            error = failure.Message;
+            if (failure is DriverFailure { Lost: true })
+            {
+                Lose(error);
+            }
+            else
+            {
+                _sink!.LogChange(GpuLogLevel.Warn, id, "readback/" + control.Key, error);
+            }
+
+            return null;
+        }
     }
 
     /// <summary>Resolves a setter that reported failure after dispatch by asking the driver what it holds now.</summary>
@@ -276,34 +303,21 @@ internal sealed partial class DriverRuntime(string id, Func<string, IDriverSink,
     ///     value despite its result code; one that still differs after the settle window is published as
     ///     the current state so the requested value is not shown as applied.
     /// </remarks>
-    private GpuCommandResult Settle(GpuCommand command, DriverControl control, GpuValue requested, string message,
+    private GpuCommandResult Settle(DriverControl control, GpuValue requested, string message,
         CancellationToken token)
     {
         if (_session is not { } session || !control.Descriptor.SupportsRead)
         {
-            return CommandResults.Indeterminate(command, GpuReasonCode.TransportFaulted, message);
+            return CommandResults.Indeterminate(GpuReasonCode.TransportFaulted, message);
         }
 
         GpuValue? readback;
         for (var attempt = 0;; attempt++)
         {
-            try
+            readback = ReadBack(session, control, out var error);
+            if (error is not null)
             {
-                session.BeginPass();
-                readback = control.Read();
-            }
-            catch (Exception failure) when (failure is not OutOfMemoryException)
-            {
-                if (failure is DriverFailure { Lost: true })
-                {
-                    Lose(failure.Message);
-                }
-                else
-                {
-                    _sink!.LogChange(GpuLogLevel.Warn, id, "readback/" + control.Key, failure.Message);
-                }
-
-                return CommandResults.Indeterminate(command, GpuReasonCode.TransportFaulted, message);
+                return CommandResults.Indeterminate(GpuReasonCode.TransportFaulted, message);
             }
 
             if (readback == requested)
@@ -312,7 +326,7 @@ internal sealed partial class DriverRuntime(string id, Func<string, IDriverSink,
                 PublishValue(control, requested, null, GpuStateQuality.Verified, CancellationToken.None);
                 _sink!.LogChange(GpuLogLevel.Info, id, "settled/" + control.Key,
                     $"{message} The driver reports the requested value on readback.");
-                return CommandResults.Verified(command, readback);
+                return CommandResults.Verified(readback!);
             }
 
             if (attempt >= SettleDelays.Length || token.IsCancellationRequested)
@@ -325,8 +339,8 @@ internal sealed partial class DriverRuntime(string id, Func<string, IDriverSink,
 
         _written.Remove(control.Key);
         PublishValue(control, readback, null, GpuStateQuality.Observed, CancellationToken.None);
-        return CommandResults.Indeterminate(command, GpuReasonCode.TransportFaulted,
-            $"{message} The driver still reports {Describe(readback)}.");
+        return CommandResults.Indeterminate(GpuReasonCode.TransportFaulted,
+            $"{message} The driver still reports {Describe(readback!)}.");
     }
 
     private static string Describe(GpuValue value)
@@ -419,7 +433,8 @@ internal sealed partial class DriverRuntime(string id, Func<string, IDriverSink,
             return;
         }
 
-        _sink!.PublishDescriptorsAsync(descriptors, token).GetAwaiter().GetResult();
+        token.ThrowIfCancellationRequested();
+        _sink!.PublishDescriptors(descriptors);
         _descriptors = descriptors;
         _published.Clear();
         var keys = model.Controls.Select(control => control.Key).ToHashSet();
@@ -465,7 +480,8 @@ internal sealed partial class DriverRuntime(string id, Func<string, IDriverSink,
         }
 
         state = state with { ObservedAt = DateTimeOffset.UtcNow };
-        _sink!.PublishCapabilityStateAsync(state, token).GetAwaiter().GetResult();
+        token.ThrowIfCancellationRequested();
+        _sink!.PublishCapabilityState(state);
         _published[control.Key] = state with { ObservedAt = null };
     }
 

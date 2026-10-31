@@ -68,12 +68,15 @@ internal sealed class ArcSyncField
         return _get(profile);
     }
 
-    /// <summary>Sets the field.</summary>
-    /// <param name="profile">The profile.</param>
+    /// <summary>A copy of a profile with this field set.</summary>
+    /// <param name="profile">The profile the other fields come from.</param>
     /// <param name="value">The value in the field's own unit.</param>
-    public void Set(ref CtlArcSyncProfileParams profile, int value)
+    /// <returns>The profile with that field set.</returns>
+    public CtlArcSyncProfileParams With(CtlArcSyncProfileParams profile, int value)
     {
-        _set(ref profile, value);
+        var result = profile;
+        _set(ref result, value);
+        return result;
     }
 
     /// <inheritdoc />
@@ -123,10 +126,12 @@ internal readonly record struct ArcSyncBounds(int MinimumHz, int MaximumHz, int 
 
     /// <summary>The range one field's row offers.</summary>
     /// <param name="field">The field.</param>
-    /// <returns>Inclusive minimum and maximum.</returns>
-    public (int Minimum, int Maximum) RangeOf(ArcSyncField field)
+    /// <returns>The inclusive range in the field's own unit.</returns>
+    public IntegerRange RangeOf(ArcSyncField field)
     {
-        return field.IsRefresh ? (MinimumHz, MaximumHz) : (0, FrameTimeMaximum);
+        return field.IsRefresh
+            ? IntegerRange.Linear(MinimumHz, MaximumHz)
+            : IntegerRange.Linear(0, FrameTimeMaximum);
     }
 
     /// <summary>One field of a profile, as the row publishes it: rounded and inside the row's range.</summary>
@@ -135,23 +140,7 @@ internal readonly record struct ArcSyncBounds(int MinimumHz, int MaximumHz, int 
     /// <returns>The value.</returns>
     public int Read(CtlArcSyncProfileParams profile, ArcSyncField field)
     {
-        var (minimum, maximum) = RangeOf(field);
-        var value = field.Get(profile);
-        return double.IsFinite(value)
-            ? (int)Math.Clamp(Math.Round(value, MidpointRounding.AwayFromZero), minimum, maximum)
-            : minimum;
-    }
-
-    /// <summary>Sets one field of a profile.</summary>
-    /// <param name="profile">The profile the other fields come from.</param>
-    /// <param name="field">The field.</param>
-    /// <param name="value">The value, already inside the row's range.</param>
-    /// <returns>The profile with that field set.</returns>
-    public static CtlArcSyncProfileParams Apply(CtlArcSyncProfileParams profile, ArcSyncField field, int value)
-    {
-        var result = profile;
-        field.Set(ref result, value);
-        return result;
+        return RangeOf(field).ToInteger(field.Get(profile));
     }
 
     /// <summary>Brings a profile's refresh rates inside the monitor's range, keeping them ordered.</summary>
@@ -202,10 +191,8 @@ internal sealed class ArcSyncDisplay
     public const int ProfileCustom = 7;
 
     private readonly IgclSource<CtlArcSyncProfileParams> _profile;
-    private CtlArcSyncProfileParams _custom;
-    private bool _customKnown;
-    private CtlArcSyncProfileParams _restore;
-    private bool _restoreKnown;
+    private CtlArcSyncProfileParams? _custom;
+    private CtlArcSyncProfileParams? _restore;
 
     private ArcSyncDisplay(IgclSource<CtlArcSyncProfileParams> profile, CtlArcSyncMonitorParams monitor)
     {
@@ -219,25 +206,6 @@ internal sealed class ArcSyncDisplay
 
     /// <summary>What a Custom profile may use, or null when the monitor's range does not allow one.</summary>
     public ArcSyncBounds? Bounds { get; }
-
-    /// <summary>The profile's support key, shared by every Arc Sync row of the display.</summary>
-    /// <param name="key">The key of a row of this display.</param>
-    /// <returns>The key every row shares.</returns>
-    public string Claim(string key)
-    {
-        return _profile.Claim(key);
-    }
-
-    /// <summary>Probes the profile setter with the exact current profile, including OFF and every custom parameter.</summary>
-    /// <param name="admission">
-    ///     Caller cancellation, deadline and live-session admission, checked immediately before any
-    ///     setter.
-    /// </param>
-    /// <returns>The shared profile probe outcome, preserving the raw enabled state and custom values.</returns>
-    public ControlWrite ProbeSupport(WriteAdmission admission)
-    {
-        return _profile.ProbeSupport(admission);
-    }
 
     /// <summary>Builds the state when the monitor supports Arc Sync.</summary>
     /// <param name="session">The session.</param>
@@ -296,10 +264,8 @@ internal sealed class ArcSyncDisplay
     {
         // The read only captures the profile to bring back; the write happens either way.
         _ = ReadProfile(out _);
-        var request = _restoreKnown ? _restore : default;
-        request.Profile = enabled
-            ? _restoreKnown ? _restore.Profile : ProfileRecommended
-            : ProfileOff;
+        var request = _restore ?? default;
+        request.Profile = enabled ? _restore?.Profile ?? ProfileRecommended : ProfileOff;
         return Set(request, admission);
     }
 
@@ -334,7 +300,7 @@ internal sealed class ArcSyncDisplay
         var current = ReadProfile(out var profile) == IgclResult.Success && profile.Profile == ProfileCustom
             ? profile
             : CustomBase();
-        var request = ArcSyncBounds.Apply(current, field, value);
+        var request = field.With(current, value);
         if (request.MinimumHz >= request.MaximumHz)
         {
             return ControlWrite.Refuse(
@@ -349,9 +315,9 @@ internal sealed class ArcSyncDisplay
     private CtlArcSyncProfileParams CustomBase()
     {
         CtlArcSyncProfileParams start;
-        if (_customKnown)
+        if (_custom is { } custom)
         {
-            start = _custom;
+            start = custom;
         }
         else if (ReadProfile(out var current) == IgclResult.Success && current.Profile != ProfileOff)
         {
@@ -393,7 +359,6 @@ internal sealed class ArcSyncDisplay
         if (profile.Profile == ProfileCustom)
         {
             _custom = profile;
-            _customKnown = true;
         }
 
         // A profile of OFF says nothing about what the user would want when enabling.
@@ -403,7 +368,6 @@ internal sealed class ArcSyncDisplay
         }
 
         _restore = profile;
-        _restoreKnown = true;
     }
 }
 
@@ -421,16 +385,6 @@ internal sealed class VariableRefreshControl : IntelControl
             semantic ? GpuRole.VariableRefreshRate : GpuRole.Toggle))
     {
         _display = display;
-        SupportKey = display.Claim(Key);
-    }
-
-    /// <inheritdoc />
-    public override string SupportKey { get; }
-
-    /// <inheritdoc />
-    public override ControlWrite ProbeSupport(WriteAdmission admission)
-    {
-        return _display.ProbeSupport(admission);
     }
 
     /// <inheritdoc />
@@ -438,7 +392,7 @@ internal sealed class VariableRefreshControl : IntelControl
     {
         var result = _display.ReadProfile(out var profile);
         return result == IgclResult.Success
-            ? ControlRead.Of(Boolean(profile.Profile != ArcSyncDisplay.ProfileOff))
+            ? ControlRead.Of(GpuValue.Boolean(profile.Profile != ArcSyncDisplay.ProfileOff))
             : ControlRead.Driver(result);
     }
 
@@ -470,37 +424,11 @@ internal sealed class ArcSyncProfileControl : IntelControl
     private readonly ArcSyncDisplay _display;
 
     public ArcSyncProfileControl(ArcSyncDisplay display, string instance, Placement placement)
-        : this(display, instance, placement, Profiles(display.Bounds is not null))
-    {
-    }
-
-    private ArcSyncProfileControl(
-        ArcSyncDisplay display,
-        string instance,
-        Placement placement,
-        IReadOnlyList<EnumMember> profiles)
-        : base(DriverDescriptors.Choice("display.arc-sync-profile", instance, "Arc Sync profile", profiles, placement),
-            profiles)
+        : base(DriverDescriptors.Choice("display.arc-sync-profile", instance, "Arc Sync profile",
+                display.Bounds is null ? Named : WithCustom, placement),
+            display.Bounds is null ? Named : WithCustom)
     {
         _display = display;
-        SupportKey = display.Claim(Key);
-    }
-
-    /// <inheritdoc />
-    public override string SupportKey { get; }
-
-    /// <inheritdoc />
-    public override ControlWrite ProbeSupport(WriteAdmission admission)
-    {
-        return _display.ProbeSupport(admission);
-    }
-
-    /// <summary>The offered profiles: the named ones, and Custom when the monitor's range allows it.</summary>
-    /// <param name="custom">Whether Custom is offered.</param>
-    /// <returns>The profiles in offer order.</returns>
-    internal static IReadOnlyList<EnumMember> Profiles(bool custom)
-    {
-        return custom ? WithCustom : Named;
     }
 
     /// <inheritdoc />
@@ -531,30 +459,14 @@ internal sealed class ArcSyncParameterControl : IntelControl
     private static readonly GpuReason NotCustom =
         new(GpuReasonCode.PrerequisiteMissing, "Only the Custom Arc Sync profile takes its own values.");
 
-    private readonly ArcSyncBounds _bounds;
     private readonly ArcSyncDisplay _display;
     private readonly ArcSyncField _field;
 
-    private ArcSyncParameterControl(
-        ArcSyncDisplay display,
-        ArcSyncBounds bounds,
-        ArcSyncField field,
-        GpuDescriptor descriptor)
+    private ArcSyncParameterControl(ArcSyncDisplay display, ArcSyncField field, GpuDescriptor descriptor)
         : base(descriptor)
     {
         _display = display;
-        SupportKey = display.Claim(Key);
-        _bounds = bounds;
         _field = field;
-    }
-
-    /// <inheritdoc />
-    public override string SupportKey { get; }
-
-    /// <inheritdoc />
-    public override ControlWrite ProbeSupport(WriteAdmission admission)
-    {
-        return _display.ProbeSupport(admission);
     }
 
     /// <summary>Builds the four Custom profile rows, when the monitor's range allows a Custom profile.</summary>
@@ -573,10 +485,9 @@ internal sealed class ArcSyncParameterControl : IntelControl
         List<ArcSyncParameterControl> rows = [];
         foreach (var field in ArcSyncField.All)
         {
-            var (minimum, maximum) = bounds.RangeOf(field);
-            rows.Add(new ArcSyncParameterControl(display, bounds, field,
-                DriverDescriptors.Range(field.Id, instance, field.Label, IntegerRange.Linear(minimum, maximum),
-                    GpuUnit.None, placement.Plus(rows.Count))));
+            rows.Add(new ArcSyncParameterControl(display, field,
+                DriverDescriptors.Range(field.Id, instance, field.Label, bounds.RangeOf(field), GpuUnit.None,
+                    placement.Plus(rows.Count))));
         }
 
         return rows;
@@ -592,7 +503,7 @@ internal sealed class ArcSyncParameterControl : IntelControl
         }
 
         // The value is what the driver applies now, shown even while the row cannot be changed.
-        var value = GpuValue.Integer(_bounds.Read(profile, _field));
+        var value = GpuValue.Integer(Range!.Value.ToInteger(_field.Get(profile)));
         return profile.Profile switch
         {
             ArcSyncDisplay.ProfileCustom => ControlRead.Of(value),

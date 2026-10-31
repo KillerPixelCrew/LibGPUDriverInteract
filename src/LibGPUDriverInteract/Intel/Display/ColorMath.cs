@@ -60,6 +60,9 @@ internal static class ColorMath
         { 0.5000, -0.4542, -0.0458 }
     };
 
+    /// <summary>The identity CSC, row-major: what neutral hue and saturation produce.</summary>
+    public static ReadOnlySpan<double> IdentityMatrix => [1, 0, 0, 0, 1, 0, 0, 0, 1];
+
     /// <summary>Fills one channel of a uniformly sampled LUT.</summary>
     /// <param name="settings">The curve settings.</param>
     /// <param name="channel">The destination, one sample per entry.</param>
@@ -117,7 +120,7 @@ internal static class ColorMath
     {
         if (settings.NeutralMatrix)
         {
-            return [1, 0, 0, 0, 1, 0, 0, 0, 1];
+            return IdentityMatrix.ToArray();
         }
 
         var saturation = Math.Clamp(settings.Saturation / 100.0, 0.75, 1.25);

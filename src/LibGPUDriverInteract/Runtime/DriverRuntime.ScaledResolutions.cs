@@ -1,13 +1,20 @@
 // SPDX-License-Identifier: MIT
 
 using LibGPUDriverInteract.Intel;
-using WindowsDeviceControl;
 
 namespace LibGPUDriverInteract.Runtime;
 
 internal sealed partial class DriverRuntime
 {
     private GpuHealth _availability = GpuHealth.Unavailable;
+
+    private GpuVendor? Vendor => id switch
+    {
+        "intel" => GpuVendor.Intel,
+        "amd" => GpuVendor.Amd,
+        "nvidia" => GpuVendor.Nvidia,
+        _ => null
+    };
 
     private GpuHealth ReportAvailability()
     {
@@ -23,7 +30,7 @@ internal sealed partial class DriverRuntime
 
     private bool HasScaledResolutionSupport()
     {
-        if (!_active() || id is not ("intel" or "amd" or "nvidia") || !OperatingSystem.IsWindows())
+        if (!_active() || Vendor is null)
         {
             return false;
         }
@@ -32,15 +39,10 @@ internal sealed partial class DriverRuntime
         // Discover actual support before reporting Ready, rather than masking a missing native backend.
         try
         {
-            foreach (var target in DisplayLayouts.Observe().Targets.Where(target => target.Available)
-                         .Select(target => target.Target))
+            var topology = DriverDisplayTargets.Capture();
+            foreach (var target in topology.Targets)
             {
-                if (ReadScaledResolutions(new GpuDisplayTarget
-                    {
-                        DevicePath = target.DevicePath, EdidIdentity = target.EdidIdentity,
-                        AdapterLowPart = target.AdapterLowPart, AdapterHighPart = target.AdapterHighPart,
-                        TargetId = target.TargetId
-                    }) is { Supported: true })
+                if (ReadScaledResolutions(topology.Describe(target, nativeOutputId: null)) is { Supported: true })
                 {
                     return true;
                 }
@@ -56,21 +58,25 @@ internal sealed partial class DriverRuntime
 
     internal GpuScaledResolutionCatalog? ReadScaledResolutions(GpuDisplayTarget display)
     {
-        return id == "intel"
-            ? (_session as IntelSession)?.ReadScaledResolutions(display)
-              ?? ScaledResolutionRegistry.Read(display, GpuVendor.Intel)
-            : ScaledResolutionRegistry.Read(display, id == "amd" ? GpuVendor.Amd : GpuVendor.Nvidia);
+        return Vendor switch
+        {
+            GpuVendor.Intel => (_session as IntelSession)?.ReadScaledResolutions(display)
+                               ?? ScaledResolutionRegistry.Read(display, GpuVendor.Intel),
+            { } vendor => ScaledResolutionRegistry.Read(display, vendor),
+            null => null
+        };
     }
 
     internal GpuScaledResolutionResult SetScaledResolution(GpuScaledResolutionCatalog observed,
-        GpuScaledResolution mode, bool remove, WriteAdmission admission)
+        GpuScaledResolution mode, bool remove, CancellationToken token)
     {
-        if (!MatchesVendor(observed.Vendor))
+        if (observed.Vendor != Vendor)
         {
             return WrongVendor();
         }
 
-        if (id == "intel")
+        var admission = new WriteAdmission(token, _active);
+        if (Vendor == GpuVendor.Intel)
         {
             return (_session as IntelSession)?.SetScaledResolution(observed, mode, remove, admission)
                    ?? new GpuScaledResolutionResult(false, false, GpuScaledResolutionActivation.Immediate,
@@ -81,14 +87,11 @@ internal sealed partial class DriverRuntime
     }
 
     internal GpuScaledResolutionResult RestartScaledResolutionDriver(GpuScaledResolutionCatalog observed,
-        WriteAdmission admission)
+        CancellationToken token)
     {
-        return MatchesVendor(observed.Vendor) ? ScaledResolutionRegistry.Restart(observed, admission) : WrongVendor();
-    }
-
-    private bool MatchesVendor(GpuVendor vendor)
-    {
-        return id == vendor switch { GpuVendor.Intel => "intel", GpuVendor.Amd => "amd", _ => "nvidia" };
+        return observed.Vendor == Vendor
+            ? ScaledResolutionRegistry.Restart(observed, new WriteAdmission(token, _active))
+            : WrongVendor();
     }
 
     private static GpuScaledResolutionResult WrongVendor()

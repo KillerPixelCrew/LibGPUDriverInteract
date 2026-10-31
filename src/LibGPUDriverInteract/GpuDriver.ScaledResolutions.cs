@@ -1,7 +1,5 @@
 // SPDX-License-Identifier: MIT
 
-using LibGPUDriverInteract.Runtime;
-
 namespace LibGPUDriverInteract;
 
 public sealed partial class GpuDriver
@@ -11,20 +9,8 @@ public sealed partial class GpuDriver
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(display);
-        if (!await EnterCommandAsync(cancellationToken).ConfigureAwait(false))
-        {
-            return null;
-        }
-
-        try
-        {
-            return await Task.Run(() => _runtime.ReadScaledResolutions(display), CancellationToken.None)
-                .ConfigureAwait(false);
-        }
-        finally
-        {
-            _lane.Release();
-        }
+        return await OnLaneAsync<GpuScaledResolutionCatalog?>(() => _runtime.ReadScaledResolutions(display),
+            () => null, cancellationToken).ConfigureAwait(false);
     }
 
     /// <summary>Adds or removes one source size, preserving all other driver data and the active display mode.</summary>
@@ -33,21 +19,18 @@ public sealed partial class GpuDriver
     {
         ArgumentNullException.ThrowIfNull(observed);
         ArgumentNullException.ThrowIfNull(mode);
-        if (!mode.Valid || !await EnterCommandAsync(cancellationToken).ConfigureAwait(false))
+        if (!mode.Valid)
+        {
+            return Refused();
+        }
+
+        return await OnLaneAsync(() => _runtime.SetScaledResolution(observed, mode, remove, cancellationToken),
+            Refused, cancellationToken).ConfigureAwait(false);
+
+        static GpuScaledResolutionResult Refused()
         {
             return new GpuScaledResolutionResult(false, false, GpuScaledResolutionActivation.Immediate,
                 "Invalid source size or driver admission is closed.");
-        }
-
-        try
-        {
-            return await Task.Run(() => _runtime.SetScaledResolution(observed, mode, remove,
-                new WriteAdmission(cancellationToken, () => _active && !_disposed)), CancellationToken.None)
-                .ConfigureAwait(false);
-        }
-        finally
-        {
-            _lane.Release();
         }
     }
 
@@ -57,21 +40,8 @@ public sealed partial class GpuDriver
         GpuScaledResolutionCatalog observed, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(observed);
-        if (!await EnterCommandAsync(cancellationToken).ConfigureAwait(false))
-        {
-            return new GpuScaledResolutionResult(false, false, GpuScaledResolutionActivation.DriverRestart,
-                "Driver admission is closed.");
-        }
-
-        try
-        {
-            return await Task.Run(() => _runtime.RestartScaledResolutionDriver(observed,
-                new WriteAdmission(cancellationToken, () => _active && !_disposed)), CancellationToken.None)
-                .ConfigureAwait(false);
-        }
-        finally
-        {
-            _lane.Release();
-        }
+        return await OnLaneAsync(() => _runtime.RestartScaledResolutionDriver(observed, cancellationToken),
+            () => new GpuScaledResolutionResult(false, false, GpuScaledResolutionActivation.DriverRestart,
+                "Driver admission is closed."), cancellationToken).ConfigureAwait(false);
     }
 }

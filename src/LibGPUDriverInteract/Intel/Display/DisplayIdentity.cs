@@ -54,8 +54,8 @@ internal static class DisplayIdentityResolver
 
     /// <summary>Captures Windows monitor identities once for discovery.</summary>
     /// <param name="log">Receives the fallback decisions.</param>
-    /// <returns>The captured topology, or null when Windows cannot query it.</returns>
-    public static DriverDisplayTargets? Capture(IDriverSink log)
+    /// <returns>The captured topology, or an empty one when Windows cannot query it.</returns>
+    public static DriverDisplayTargets Capture(IDriverSink log)
     {
         try
         {
@@ -64,7 +64,7 @@ internal static class DisplayIdentityResolver
         catch (Exception error) when (error is not OutOfMemoryException)
         {
             log.Warn("display", "Windows display identities are unavailable: " + error.Message);
-            return null;
+            return new DriverDisplayTargets([], []);
         }
     }
 
@@ -73,12 +73,11 @@ internal static class DisplayIdentityResolver
     /// <param name="log">Receives fallback decisions.</param>
     /// <param name="topology">The capture for this discovery.</param>
     /// <returns>A stable identity, or a session-local fallback when Windows has no matching output.</returns>
-    public static DisplayIdentity Resolve(IgclOutput output, IDriverSink log, DriverDisplayTargets? topology)
+    public static DisplayIdentity Resolve(IgclOutput output, IDriverSink log, DriverDisplayTargets topology)
     {
-        var target = topology?.ByRoute((uint)output.Adapter.Luid, (int)(output.Adapter.Luid >> 32), output.TargetId);
+        var target = topology.ByRoute((uint)output.Adapter.Luid, (int)(output.Adapter.Luid >> 32), output.TargetId);
         var nativeId = $"{output.Adapter.Luid:x16}/{output.TargetId}";
-        var metadata = topology?.Describe(target, nativeId) ?? new GpuDisplayTarget { NativeOutputId = nativeId };
-        metadata = metadata with
+        var metadata = topology.Describe(target, nativeId) with
         {
             AdapterLowPart = (uint)output.Adapter.Luid,
             AdapterHighPart = (int)(output.Adapter.Luid >> 32),
@@ -99,7 +98,7 @@ internal static class DisplayIdentityResolver
 
         // IGCL's encoder flag decides; Windows' output technology only answers when IGCL does not.
         var isInternal = output.Internal
-                         ?? topology?.Active.FirstOrDefault(path => path.Target == target)?.OutputTechnology
+                         ?? topology.Active.FirstOrDefault(path => path.Target == target)?.OutputTechnology
                              is OutputInternal or OutputDisplayPortEmbedded or OutputLvds
                              or OutputUdiEmbedded;
         var manufacturer = target.EdidManufacturerId is { } code
