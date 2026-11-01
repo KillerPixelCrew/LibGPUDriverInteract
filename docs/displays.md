@@ -67,6 +67,27 @@ when its display is next discovered, if the driver still runs that rate. A lost 
 its record waits for the next session. This path follows Intel's header and the maintainer's earlier
 manual use of the Custom profile; it has no recorded hardware acceptance yet.
 
+## Arc Sync for the owning policy and Intel's frame rate solutions
+
+`ReadArcSyncAsync` returns one display's monitor range, the profile the driver runs and, while a rate is
+fixed, the profile captured beneath it (`GpuArcSyncState`). `SetArcSyncProfileAsync` writes a profile
+for the one policy that owns Arc Sync, such as a variable refresh range it keeps, with its values as
+given. It is not a user's row: it ends no fixed rate and hands nothing to the user, and enabling
+variable refresh again returns to it. While the driver still runs a rate this library fixed it writes
+nothing and says so; the policy supplies the profile through `SetRefreshRateBaselineAsync`, and the
+release writes it. Both log the profile, its bounds and the driver result under `arcsync`.
+
+`ReadVrrSolutionsAsync` and `SetVrrSolutionAsync` use Intel's private D3DKMT VRR escape on the adapter
+of the output that drives the display, opened by its LUID: a 124-byte driver-private payload with
+display escape major 1 and VRR minor 10 at offsets 8 and 12 and the operation at 16. Operation 0
+reads; the answer's bytes 20 to 23 are support, enabled, high and low frame rate solution. Operations
+3 and 4 turn the low frame rate solution (LFC) on and off, 5 and 6 the high one. The layout and
+operations follow ClawLab's MSI Claw Intel VRR Range Fix 3.0.0 (MIT, see
+[third-party notices](../THIRD_PARTY_NOTICES.md)), which opens the same adapter through the device
+context of the single active Intel display. The flags are adapter-wide driver state that outlives the
+process; the caller owns putting them back, and no write is retried. The payload is covered by tests
+as bytes; hardware behavior is the Atlas8Tweaks and ClawLab testing's, not this library's.
+
 ## Physical output controls
 
 NVIDIA publishes `display.gsync` separately for each supported physical output, using

@@ -11,5 +11,6 @@
     <InternalsVisibleTo Include="LibGPUDriverInteract.Tests" />
     <None Include="../../LICENSE" Link="LibGPUDriverInteract-LICENSE.txt" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     <None Include="../../PROVENANCE.md" Link="LibGPUDriverInteract-PROVENANCE.md" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <None Include="../../THIRD_PARTY_NOTICES.md" Link="LibGPUDriverInteract-THIRD_PARTY_NOTICES.md" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
   </ItemGroup>
 </Project>

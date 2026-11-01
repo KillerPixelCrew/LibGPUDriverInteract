@@ -65,3 +65,40 @@ public sealed record GpuArcSyncBaseline(
     double MaximumHz,
     uint MaxFrameTimeIncreaseUs = 0,
     uint MaxFrameTimeDecreaseUs = 0);
+
+/// <summary>One display's Intel Arc Sync state, as the policy that owns the profile reads it.</summary>
+/// <param name="Display">The display.</param>
+/// <param name="MonitorMinimumHz">The lowest rate the monitor reports for variable refresh.</param>
+/// <param name="MonitorMaximumHz">The highest rate the monitor reports for variable refresh.</param>
+/// <param name="Profile">The profile the driver runs now; the Custom fixed profile while a rate is fixed.</param>
+/// <param name="FixedHz">The rate this driver owner holds now, or null when none is fixed.</param>
+/// <param name="BeforeFixed">While a rate is fixed, the profile in use before the first fixed write; otherwise null.</param>
+public sealed record GpuArcSyncState(
+    GpuDisplayTarget Display,
+    double MonitorMinimumHz,
+    double MonitorMaximumHz,
+    GpuArcSyncBaseline Profile,
+    double? FixedHz,
+    GpuArcSyncBaseline? BeforeFixed);
+
+/// <summary>One of Intel's variable refresh frame rate solutions.</summary>
+public enum GpuVrrSolution
+{
+    /// <summary>The low frame rate solution (LFC), which repeats frames below the panel's range.</summary>
+    LowFrameRate,
+
+    /// <summary>The high frame rate solution.</summary>
+    HighFrameRate
+}
+
+/// <summary>Intel's variable refresh state for the adapter driving a display, from its private VRR escape.</summary>
+/// <param name="Supported">Whether the adapter reports variable refresh support.</param>
+/// <param name="Enabled">Whether variable refresh is enabled.</param>
+/// <param name="LowFrameRate">Whether the low frame rate solution (LFC) is on.</param>
+/// <param name="HighFrameRate">Whether the high frame rate solution is on.</param>
+public sealed record GpuVrrSolutions(bool Supported, bool Enabled, bool LowFrameRate, bool HighFrameRate);
+
+/// <summary>The result of a display write the owning policy made.</summary>
+/// <param name="Applied">Whether the driver accepted the setter.</param>
+/// <param name="Detail">A sentence for the log.</param>
+public sealed record GpuDisplayWriteResult(bool Applied, string Detail);

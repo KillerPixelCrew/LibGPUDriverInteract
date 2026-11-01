@@ -25,6 +25,14 @@ ValueTask<GpuRefreshRateResult> RestoreRefreshRateAsync(GpuDisplayTarget display
     CancellationToken cancellationToken = default);
 ValueTask<bool> SetRefreshRateBaselineAsync(GpuDisplayTarget display, GpuArcSyncBaseline? baseline,
     CancellationToken cancellationToken = default);
+ValueTask<GpuArcSyncState?> ReadArcSyncAsync(GpuDisplayTarget display,
+    CancellationToken cancellationToken = default);
+ValueTask<GpuDisplayWriteResult> SetArcSyncProfileAsync(GpuDisplayTarget display,
+    GpuArcSyncBaseline profile, CancellationToken cancellationToken = default);
+ValueTask<GpuVrrSolutions?> ReadVrrSolutionsAsync(GpuDisplayTarget display,
+    CancellationToken cancellationToken = default);
+ValueTask<GpuDisplayWriteResult> SetVrrSolutionAsync(GpuDisplayTarget display, GpuVrrSolution solution,
+    bool enabled, CancellationToken cancellationToken = default);
 ValueTask DisposeAsync();
 
 event Action<GpuDescriptorSet>? DescriptorsChanged;

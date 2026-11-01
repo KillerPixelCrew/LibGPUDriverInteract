@@ -18,6 +18,12 @@ Fixed refresh rates use the Arc Sync Custom profile from the same public IGCL he
 bounds at the requested rate, as the WSGM maintainer set rates by hand before. No hardware result is
 recorded for this path yet; see [Display mechanisms](docs/displays.md#fixed-refresh-rates).
 
+The policy Arc Sync write and Intel's private VRR escape for the low and high frame rate solutions
+follow ClawLab's MSI Claw Intel VRR Range Fix 3.0.0 (MIT), as carried unchanged into the maintainer's
+Atlas8Tweaks VRR Fix 1.0.0 `engine/Interop.ps1`. This library reimplements them in its own IGCL session
+and opens the escape's adapter by LUID; see [third-party notices](THIRD_PARTY_NOTICES.md) and
+[Display mechanisms](docs/displays.md#arc-sync-for-the-owning-policy-and-intels-frame-rate-solutions).
+
 - [Intel implementation provenance](https://github.com/KillerPixelCrew/WSGM/blob/1df3f4d8987fcff5f1c8f2554c489195f1cb8b13/src/WSGM.Plugin.IntelGpu/PROVENANCE.md):
   Intel Graphics Control Library headers/samples and dated observations.
 - [AMD implementation provenance](https://github.com/KillerPixelCrew/WSGM/blob/1df3f4d8987fcff5f1c8f2554c489195f1cb8b13/src/WSGM.Plugin.AmdGpu/PROVENANCE.md):

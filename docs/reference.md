@@ -7,6 +7,9 @@ documentation. Native internals and compiler-generated record helpers are omitte
 - [GpuApplicationProfile](#gpuapplicationprofile)
 - [GpuApplicationValue](#gpuapplicationvalue)
 - [GpuApplyTiming](#gpuapplytiming)
+- [GpuArcSyncBaseline](#gpuarcsyncbaseline)
+- [GpuArcSyncProfile](#gpuarcsyncprofile)
+- [GpuArcSyncState](#gpuarcsyncstate)
 - [GpuCategory](#gpucategory)
 - [GpuChoice](#gpuchoice)
 - [GpuCommand](#gpucommand)
@@ -15,6 +18,7 @@ documentation. Native internals and compiler-generated record helpers are omitte
 - [GpuDescriptor](#gpudescriptor)
 - [GpuDescriptorSet](#gpudescriptorset)
 - [GpuDisplayTarget](#gpudisplaytarget)
+- [GpuDisplayWriteResult](#gpudisplaywriteresult)
 - [GpuDriver](#gpudriver)
 - [GpuHealth](#gpuhealth)
 - [GpuLogEntry](#gpulogentry)
@@ -26,7 +30,14 @@ documentation. Native internals and compiler-generated record helpers are omitte
 - [GpuProfileSyncResult](#gpuprofilesyncresult)
 - [GpuReason](#gpureason)
 - [GpuReasonCode](#gpureasoncode)
+- [GpuRefreshRateOutcome](#gpurefreshrateoutcome)
+- [GpuRefreshRateRange](#gpurefreshraterange)
+- [GpuRefreshRateResult](#gpurefreshrateresult)
 - [GpuRole](#gpurole)
+- [GpuScaledResolution](#gpuscaledresolution)
+- [GpuScaledResolutionActivation](#gpuscaledresolutionactivation)
+- [GpuScaledResolutionCatalog](#gpuscaledresolutioncatalog)
+- [GpuScaledResolutionResult](#gpuscaledresolutionresult)
 - [GpuSection](#gpusection)
 - [GpuSectionKind](#gpusectionkind)
 - [GpuState](#gpustate)
@@ -36,6 +47,8 @@ documentation. Native internals and compiler-generated record helpers are omitte
 - [GpuValue](#gpuvalue)
 - [GpuValueKind](#gpuvaluekind)
 - [GpuVendor](#gpuvendor)
+- [GpuVrrSolution](#gpuvrrsolution)
+- [GpuVrrSolutions](#gpuvrrsolutions)
 
 ## GpuApplicationProfile
 
@@ -78,6 +91,61 @@ When a successfully written setting takes effect.
 | `Immediate`            | `0`           | Immediately.                             |
 | `NextApplicationStart` | `1`           | When the target application next starts. |
 | `SystemRestart`        | `2`           | After Windows restarts.                  |
+
+## GpuArcSyncBaseline
+
+Namespace: `LibGPUDriverInteract`.
+
+The Arc Sync profile a released fixed refresh rate returns to on one display. `Profile`: The
+profile. `MinimumHz`: The lowest refresh rate the profile uses. `MaximumHz`: The highest refresh
+rate the profile uses. `MaxFrameTimeIncreaseUs`: The frame time increase limit, in microseconds.
+`MaxFrameTimeDecreaseUs`: The frame time decrease limit, in microseconds.
+
+| Member                                                                                                                                                    | Contract                                                                                                                                                                                                                                                                                                                                                                 |
+| --------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `GpuArcSyncBaseline(GpuArcSyncProfile Profile, Double MinimumHz, Double MaximumHz, UInt32 MaxFrameTimeIncreaseUs = 0, UInt32 MaxFrameTimeDecreaseUs = 0)` | The Arc Sync profile a released fixed refresh rate returns to on one display. `Profile`: The profile. `MinimumHz`: The lowest refresh rate the profile uses. `MaximumHz`: The highest refresh rate the profile uses. `MaxFrameTimeIncreaseUs`: The frame time increase limit, in microseconds. `MaxFrameTimeDecreaseUs`: The frame time decrease limit, in microseconds. |
+| `GpuArcSyncProfile Profile { get; init; }`                                                                                                                | The profile.                                                                                                                                                                                                                                                                                                                                                             |
+| `Double MinimumHz { get; init; }`                                                                                                                         | The lowest refresh rate the profile uses.                                                                                                                                                                                                                                                                                                                                |
+| `Double MaximumHz { get; init; }`                                                                                                                         | The highest refresh rate the profile uses.                                                                                                                                                                                                                                                                                                                               |
+| `UInt32 MaxFrameTimeIncreaseUs { get; init; }`                                                                                                            | The frame time increase limit, in microseconds.                                                                                                                                                                                                                                                                                                                          |
+| `UInt32 MaxFrameTimeDecreaseUs { get; init; }`                                                                                                            | The frame time decrease limit, in microseconds.                                                                                                                                                                                                                                                                                                                          |
+
+## GpuArcSyncProfile
+
+Namespace: `LibGPUDriverInteract`.
+
+An Intel Arc Sync profile, as the driver names them.
+
+| Value         | Numeric value | Meaning                                       |
+| ------------- | ------------- | --------------------------------------------- |
+| `Recommended` | `1`           | The driver's recommended profile.             |
+| `Excellent`   | `2`           | The Excellent profile.                        |
+| `Good`        | `3`           | The Good profile.                             |
+| `Compatible`  | `4`           | The Compatible profile.                       |
+| `Off`         | `5`           | Variable refresh off.                         |
+| `Vesa`        | `6`           | The VESA profile.                             |
+| `Custom`      | `7`           | A custom refresh range and frame time limits. |
+
+## GpuArcSyncState
+
+Namespace: `LibGPUDriverInteract`.
+
+One display's Intel Arc Sync state, as the policy that owns the profile reads it. `Display`: The
+display. `MonitorMinimumHz`: The lowest rate the monitor reports for variable refresh.
+`MonitorMaximumHz`: The highest rate the monitor reports for variable refresh. `Profile`: The
+profile the driver runs now; the Custom fixed profile while a rate is fixed. `FixedHz`: The rate
+this driver owner holds now, or null when none is fixed. `BeforeFixed`: While a rate is fixed, the
+profile in use before the first fixed write; otherwise null.
+
+| Member                                                                                                                                                                     | Contract                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `GpuArcSyncState(GpuDisplayTarget Display, Double MonitorMinimumHz, Double MonitorMaximumHz, GpuArcSyncBaseline Profile, Double? FixedHz, GpuArcSyncBaseline BeforeFixed)` | One display's Intel Arc Sync state, as the policy that owns the profile reads it. `Display`: The display. `MonitorMinimumHz`: The lowest rate the monitor reports for variable refresh. `MonitorMaximumHz`: The highest rate the monitor reports for variable refresh. `Profile`: The profile the driver runs now; the Custom fixed profile while a rate is fixed. `FixedHz`: The rate this driver owner holds now, or null when none is fixed. `BeforeFixed`: While a rate is fixed, the profile in use before the first fixed write; otherwise null. |
+| `GpuDisplayTarget Display { get; init; }`                                                                                                                                  | The display.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| `Double MonitorMinimumHz { get; init; }`                                                                                                                                   | The lowest rate the monitor reports for variable refresh.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| `Double MonitorMaximumHz { get; init; }`                                                                                                                                   | The highest rate the monitor reports for variable refresh.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| `GpuArcSyncBaseline Profile { get; init; }`                                                                                                                                | The profile the driver runs now; the Custom fixed profile while a rate is fixed.                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| `Double? FixedHz { get; init; }`                                                                                                                                           | The rate this driver owner holds now, or null when none is fixed.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| `GpuArcSyncBaseline BeforeFixed { get; init; }`                                                                                                                            | While a rate is fixed, the profile in use before the first fixed write; otherwise null.                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
 
 ## GpuCategory
 
@@ -201,6 +269,19 @@ on topology discovery. Persist the monitor identity, never GDI numbering or nati
 | `UInt32? TargetId { get; init; }`       | Current CCD target identifier.                                                     |
 | `String NativeOutputId { get; init; }`  | Vendor-native output identity for diagnostics; never a cross-vendor Windows route. |
 
+## GpuDisplayWriteResult
+
+Namespace: `LibGPUDriverInteract`.
+
+The result of a display write the owning policy made. `Applied`: Whether the driver accepted the
+setter. `Detail`: A sentence for the log.
+
+| Member                                                  | Contract                                                                                                                                   |
+| ------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| `GpuDisplayWriteResult(Boolean Applied, String Detail)` | The result of a display write the owning policy made. `Applied`: Whether the driver accepted the setter. `Detail`: A sentence for the log. |
+| `Boolean Applied { get; init; }`                        | Whether the driver accepted the setter.                                                                                                    |
+| `String Detail { get; init; }`                          | A sentence for the log.                                                                                                                    |
+
 ## GpuDriver
 
 Namespace: `LibGPUDriverInteract`.
@@ -208,53 +289,30 @@ Namespace: `LibGPUDriverInteract`.
 Owns one GPU driver's controls and native lifetime, serialized on one lane. Events run on the
 publishing thread. Native writes are never retried.
 
-| Member                                                                                                                                  | Contract                                                                                                                                                          |
-| --------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `event Action<GpuDescriptorSet> DescriptorsChanged`                                                                                     | Raised for a complete detached descriptor replacement.                                                                                                            |
-| `event Action<GpuState> StateChanged`                                                                                                   | Raised when an observation changes.                                                                                                                               |
-| `event Action<GpuStatus> StatusChanged`                                                                                                 | Raised when driver availability changes.                                                                                                                          |
-| `ValueTask DisposeAsync()`                                                                                                              | Awaits complete native cleanup. The driver library remains loaded until owned calls finish.                                                                       |
-| `GpuDriver Create(GpuVendor vendor, String stateDirectory, Action<GpuLogEntry> diagnostics = null/default)`                             | Creates a stopped owner. Start opens the native driver.                                                                                                           |
-| `IReadOnlyList<GpuVendor> DetectVendors()`                                                                                              | Detects present Intel, AMD and NVIDIA display adapter vendors without opening driver sessions.                                                                    |
-| `ValueTask<GpuHealth> StartAsync(CancellationToken cancellationToken = null/default)`                                                   | Opens the native session and discovers controls once. Cancelling a wait does not stop startup.                                                                    |
-| `ValueTask<Boolean> StopAsync(CancellationToken cancellationToken = null/default)`                                                      | Closes admission immediately and awaits the owned native call before unloading. False if the caller stops waiting; cleanup continues and a later start awaits it. |
-| `ValueTask<GpuCommandResult> ExecuteAsync(GpuCommand command, CancellationToken cancellationToken = null/default)`                      | Dispatches one typed request without automatic retry or rollback.                                                                                                 |
-| `ValueTask<GpuProfileSyncResult> SyncApplicationProfilesAsync(GpuProfileSync sync, CancellationToken cancellationToken = null/default)` | Synchronizes the complete desired set of native application profiles.                                                                                             |
-| `ValueTask RefreshTopologyAsync(CancellationToken cancellationToken = null/default)`                                                    | Rediscovers adapters and displays after an explicit topology notification. A lost session reopens here or on the next explicit command, never on a polling pass.  |
-| `ValueTask<GpuRefreshRateRange> ReadRefreshRateRangeAsync(GpuDisplayTarget display, CancellationToken cancellationToken = null/default)` | The range a refresh rate can be fixed in without a Windows mode change, or null. Intel only: the monitor's Arc Sync range. |
-| `ValueTask<GpuRefreshRateResult> SetRefreshRateAsync(GpuDisplayTarget display, Double refreshHz, CancellationToken cancellationToken = null/default)` | Holds the display at a rate, fractions allowed, clamped to that range. Intel writes the Custom Arc Sync profile with both bounds at the rate. Never retried. |
-| `ValueTask<GpuRefreshRateResult> RestoreRefreshRateAsync(GpuDisplayTarget display, CancellationToken cancellationToken = null/default)` | Puts back the profile in use before the first fixed rate. Unchanged when no rate is fixed or the profile was changed since. |
-| `ValueTask<Boolean> SetRefreshRateBaselineAsync(GpuDisplayTarget display, GpuArcSyncBaseline baseline, CancellationToken cancellationToken = null/default)` | Supplies the Arc Sync profile a released fixed rate returns to, or null for the captured one. Writes nothing now. False without Arc Sync on that display. |
-
-## GpuRefreshRateRange
-
-Namespace: `LibGPUDriverInteract`.
-
-`GpuRefreshRateRange(Display, MinimumHz, MaximumHz, FixedHz)`: the monitor's reported range and the rate
-this owner holds now, or null.
-
-## GpuArcSyncBaseline
-
-Namespace: `LibGPUDriverInteract`.
-
-`GpuArcSyncBaseline(Profile, MinimumHz, MaximumHz, MaxFrameTimeIncreaseUs = 0, MaxFrameTimeDecreaseUs = 0)`:
-the profile a released fixed rate returns to. `GpuArcSyncProfile` carries the driver's own values:
-`Recommended` 1, `Excellent` 2, `Good` 3, `Compatible` 4, `Off` 5, `Vesa` 6, `Custom` 7.
-
-## GpuRefreshRateOutcome
-
-| Value       | Numeric value | Meaning                                                      |
-| ----------- | ------------- | ------------------------------------------------------------ |
-| `Applied`   | `0`           | The driver accepted the setter.                              |
-| `Unchanged` | `1`           | Nothing needed writing.                                      |
-| `Refused`   | `2`           | Refused, or the driver answered with a failure. Not retried. |
-
-## GpuRefreshRateResult
-
-Namespace: `LibGPUDriverInteract`.
-
-`GpuRefreshRateResult(Outcome, RefreshHz, Detail)`: the outcome, the rate now fixed after clamping or
-null, and a sentence for the log.
+| Member                                                                                                                                                                                             | Contract                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `event Action<GpuDescriptorSet> DescriptorsChanged`                                                                                                                                                | Raised for a complete detached descriptor replacement.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| `event Action<GpuState> StateChanged`                                                                                                                                                              | Raised when an observation changes.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| `event Action<GpuStatus> StatusChanged`                                                                                                                                                            | Raised when driver availability changes.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| `ValueTask DisposeAsync()`                                                                                                                                                                         | Awaits complete native cleanup. The driver library remains loaded until owned calls finish.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| `GpuDriver Create(GpuVendor vendor, String stateDirectory, Action<GpuLogEntry> diagnostics = null/default)`                                                                                        | Creates a stopped owner. Start opens the native driver.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| `IReadOnlyList<GpuVendor> DetectVendors()`                                                                                                                                                         | Detects present Intel, AMD and NVIDIA display adapter vendors without opening driver sessions.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| `ValueTask<GpuHealth> StartAsync(CancellationToken cancellationToken = null/default)`                                                                                                              | Opens the native session and discovers controls once. Cancelling a wait does not stop startup.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| `ValueTask<Boolean> StopAsync(CancellationToken cancellationToken = null/default)`                                                                                                                 | Closes admission immediately and awaits the owned native call before unloading. False if the caller stops waiting; cleanup continues and a later start awaits it.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| `ValueTask<GpuCommandResult> ExecuteAsync(GpuCommand command, CancellationToken cancellationToken = null/default)`                                                                                 | Dispatches one typed request without automatic retry or rollback.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| `ValueTask<GpuProfileSyncResult> SyncApplicationProfilesAsync(GpuProfileSync sync, CancellationToken cancellationToken = null/default)`                                                            | Synchronizes the complete desired set of native application profiles.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| `ValueTask RefreshTopologyAsync(CancellationToken cancellationToken = null/default)`                                                                                                               | Rediscovers adapters and displays after an explicit topology notification. A lost session reopens here or on the next explicit command, never on a polling pass.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| `ValueTask<GpuRefreshRateRange> ReadRefreshRateRangeAsync(GpuDisplayTarget display, CancellationToken cancellationToken = null/default)`                                                           | Reads the range a refresh rate can be fixed in on one display, on the serialized driver lane. The range, or null when this vendor or display cannot fix a rate. Intel only: the monitor's Arc Sync range from ctlGetIntelArcSyncInfoForMonitor.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| `ValueTask<GpuRefreshRateResult> SetRefreshRateAsync(GpuDisplayTarget display, Double refreshHz, CancellationToken cancellationToken = null/default)`                                              | Holds one display at a refresh rate without changing its Windows mode. `display`: The display. `refreshHz`: The rate, fractions allowed; clamped to the range the monitor reports. `cancellationToken`: Cancels the wait for the lane; not a dispatched setter. The outcome and the rate the request carried. Intel writes the Custom Arc Sync profile with its minimum and maximum both at the rate. The first write captures the profile in use, and LibGPUDriverInteract.GpuDriver.RestoreRefreshRateAsync(LibGPUDriverInteract.GpuDisplayTarget,System.Threading.CancellationToken), a stop, or the next start after a crash puts it back. A write through an Arc Sync control hands the profile back to the user and ends the fixed rate.                                                     |
+| `ValueTask<GpuRefreshRateResult> RestoreRefreshRateAsync(GpuDisplayTarget display, CancellationToken cancellationToken = null/default)`                                                            | Puts back the profile in use before a refresh rate was fixed on one display. Applied when a profile was written back, Unchanged when no rate was fixed.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| `ValueTask<Boolean> SetRefreshRateBaselineAsync(GpuDisplayTarget display, GpuArcSyncBaseline baseline, CancellationToken cancellationToken = null/default)`                                        | Supplies the Arc Sync profile a released fixed refresh rate returns to on one display, instead of the profile captured before the first fixed rate. `display`: The display. `baseline`: The profile, or null to return to the captured one again. `cancellationToken`: Cancels the wait for the lane. Whether the display has Arc Sync and took the baseline; false on another vendor or display. For the one policy that owns the Arc Sync profile beneath a fixed rate, such as a variable refresh range it keeps. Nothing is written now: the baseline is what the next release, the session's close or the next start's recovery writes. It lasts for the session.                                                                                                                             |
+| `ValueTask<GpuArcSyncState> ReadArcSyncAsync(GpuDisplayTarget display, CancellationToken cancellationToken = null/default)`                                                                        | Reads one display's Arc Sync range and profile, on the serialized driver lane. `display`: The display. `cancellationToken`: Cancels the wait for the lane. The state, or null when this vendor or display has no Arc Sync or the profile could not be read. Intel only: ctlGetIntelArcSyncInfoForMonitor and ctlGetIntelArcSyncProfile.                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| `ValueTask<GpuDisplayWriteResult> SetArcSyncProfileAsync(GpuDisplayTarget display, GpuArcSyncBaseline profile, CancellationToken cancellationToken = null/default)`                                | Writes one display's Arc Sync profile for the policy that owns it, not for a user's row. `display`: The display. `profile`: The profile and its values, written as given. `cancellationToken`: Cancels the wait for the lane; not a dispatched setter. Whether the driver accepted it. While this owner holds a fixed refresh rate on the display nothing is written and the result says so: supply the profile through LibGPUDriverInteract.GpuDriver.SetRefreshRateBaselineAsync(LibGPUDriverInteract.GpuDisplayTarget,LibGPUDriverInteract.GpuArcSyncBaseline,System.Threading.CancellationToken) and the release writes it. Unlike a write through an Arc Sync row this does not hand the profile to the user, and turning variable refresh back on returns to it. The write is never retried. |
+| `ValueTask<GpuVrrSolutions> ReadVrrSolutionsAsync(GpuDisplayTarget display, CancellationToken cancellationToken = null/default)`                                                                   | Reads Intel's variable refresh frame rate solutions for the adapter driving a display. `display`: The display. `cancellationToken`: Cancels the wait for the lane. The state, or null on another vendor or display, or when the escape failed (logged). Intel only: the driver's private D3DKMT VRR escape, read operation.                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| `ValueTask<GpuDisplayWriteResult> SetVrrSolutionAsync(GpuDisplayTarget display, GpuVrrSolution solution, Boolean enabled, CancellationToken cancellationToken = null/default)`                     | Turns one of Intel's variable refresh frame rate solutions on or off for the adapter driving a display. `display`: The display. `solution`: The solution. `enabled`: The request. `cancellationToken`: Cancels the wait for the lane; not a dispatched setter. Whether the driver accepted it. Intel only: the private VRR escape's operations 3 and 4 (low frame rate on, off) and 5 and 6 (high frame rate on, off). The setting is adapter-wide driver state that outlives the process; the caller owns putting it back. The write is never retried.                                                                                                                                                                                                                                            |
+| `ValueTask<GpuScaledResolutionCatalog> ReadScaledResolutionsAsync(GpuDisplayTarget display, CancellationToken cancellationToken = null/default)`                                                   | Reads source sizes on the existing serialized driver lane; never activates a display mode.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| `ValueTask<GpuScaledResolutionResult> SetScaledResolutionAsync(GpuScaledResolutionCatalog observed, GpuScaledResolution mode, Boolean remove, CancellationToken cancellationToken = null/default)` | Adds or removes one source size, preserving all other driver data and the active display mode.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| `ValueTask<GpuScaledResolutionResult> RestartScaledResolutionDriverAsync(GpuScaledResolutionCatalog observed, CancellationToken cancellationToken = null/default)`                                 | Explicitly restarts only the selected display's still-matching driving adapter. The display can go blank and graphics applications can lose their devices.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
 
 ## GpuHealth
 
@@ -390,6 +448,50 @@ The reason a setting or command cannot complete cleanly.
 | `Unsupported`         | `4`           | The driver does not support the requested setting.         |
 | `ValueOutOfRange`     | `5`           | The requested value does not match the current descriptor. |
 
+## GpuRefreshRateOutcome
+
+Namespace: `LibGPUDriverInteract`.
+
+What a refresh-rate write or release did.
+
+| Value       | Numeric value | Meaning                                                                          |
+| ----------- | ------------- | -------------------------------------------------------------------------------- |
+| `Applied`   | `0`           | The driver accepted the setter.                                                  |
+| `Unchanged` | `1`           | Nothing needed writing.                                                          |
+| `Refused`   | `2`           | The write was refused or the driver answered with a failure; nothing is retried. |
+
+## GpuRefreshRateRange
+
+Namespace: `LibGPUDriverInteract`.
+
+The refresh rates a driver can hold one display at, without a Windows mode change. `Display`: The
+display the range belongs to. `MinimumHz`: The lowest rate the monitor reports. `MaximumHz`: The
+highest rate the monitor reports. `FixedHz`: The rate this driver owner holds now, or null when none
+is fixed.
+
+| Member                                                                                               | Contract                                                                                                                                                                                                                                                                                                          |
+| ---------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `GpuRefreshRateRange(GpuDisplayTarget Display, Double MinimumHz, Double MaximumHz, Double? FixedHz)` | The refresh rates a driver can hold one display at, without a Windows mode change. `Display`: The display the range belongs to. `MinimumHz`: The lowest rate the monitor reports. `MaximumHz`: The highest rate the monitor reports. `FixedHz`: The rate this driver owner holds now, or null when none is fixed. |
+| `GpuDisplayTarget Display { get; init; }`                                                            | The display the range belongs to.                                                                                                                                                                                                                                                                                 |
+| `Double MinimumHz { get; init; }`                                                                    | The lowest rate the monitor reports.                                                                                                                                                                                                                                                                              |
+| `Double MaximumHz { get; init; }`                                                                    | The highest rate the monitor reports.                                                                                                                                                                                                                                                                             |
+| `Double? FixedHz { get; init; }`                                                                     | The rate this driver owner holds now, or null when none is fixed.                                                                                                                                                                                                                                                 |
+
+## GpuRefreshRateResult
+
+Namespace: `LibGPUDriverInteract`.
+
+The result of a refresh-rate write or release. `Outcome`: What happened. `RefreshHz`: The rate now
+fixed, after clamping to the monitor's range, or null when none is. `Detail`: A sentence for the
+log.
+
+| Member                                                                                  | Contract                                                                                                                                                                                                 |
+| --------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `GpuRefreshRateResult(GpuRefreshRateOutcome Outcome, Double? RefreshHz, String Detail)` | The result of a refresh-rate write or release. `Outcome`: What happened. `RefreshHz`: The rate now fixed, after clamping to the monitor's range, or null when none is. `Detail`: A sentence for the log. |
+| `GpuRefreshRateOutcome Outcome { get; init; }`                                          | What happened.                                                                                                                                                                                           |
+| `Double? RefreshHz { get; init; }`                                                      | The rate now fixed, after clamping to the monitor's range, or null when none is.                                                                                                                         |
+| `String Detail { get; init; }`                                                          | A sentence for the log.                                                                                                                                                                                  |
+
 ## GpuRole
 
 Namespace: `LibGPUDriverInteract`.
@@ -404,6 +506,63 @@ The meaning and presentation shape of a driver control.
 | `ReadOnly`            | `3`           | An observed value which cannot be changed. |
 | `Action`              | `4`           | A one-shot operation.                      |
 | `VariableRefreshRate` | `5`           | Variable refresh rate enablement.          |
+
+## GpuScaledResolution
+
+Namespace: `LibGPUDriverInteract`.
+
+A GPU source size, with no refresh rate or signal timing.
+
+| Member                                           | Contract                                                          |
+| ------------------------------------------------ | ----------------------------------------------------------------- |
+| `GpuScaledResolution(Int32 Width, Int32 Height)` | A GPU source size, with no refresh rate or signal timing.         |
+| `Int32 Width { get; init; }`                     |                                                                   |
+| `Int32 Height { get; init; }`                    |                                                                   |
+| `Boolean Valid { get; }`                         | Whether both dimensions fit the shared source-mode editor limits. |
+
+## GpuScaledResolutionActivation
+
+Namespace: `LibGPUDriverInteract`.
+
+Activation required after an accepted source-mode edit.
+
+| Value           | Numeric value | Meaning                                                                  |
+| --------------- | ------------- | ------------------------------------------------------------------------ |
+| `Immediate`     | `0`           | No driver restart is needed.                                             |
+| `DriverRestart` | `1`           | The stored adapter list needs an explicit driver restart.                |
+| `Uncertain`     | `2`           | The write may have completed; inspect before any new explicit operation. |
+
+## GpuScaledResolutionCatalog
+
+Namespace: `LibGPUDriverInteract`.
+
+The current driving adapter and its custom source-size catalog.
+
+| Member                                                                                                                                                                                                                   | Contract                                                        |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------- |
+| `GpuScaledResolutionCatalog(GpuDisplayTarget Display, GpuVendor Vendor, String AdapterIdentity, String AdapterName, Boolean OutputSpecific, Boolean Supported, IReadOnlyList<GpuScaledResolution> Modes, String Detail)` | The current driving adapter and its custom source-size catalog. |
+| `GpuDisplayTarget Display { get; init; }`                                                                                                                                                                                |                                                                 |
+| `GpuVendor Vendor { get; init; }`                                                                                                                                                                                        |                                                                 |
+| `String AdapterIdentity { get; init; }`                                                                                                                                                                                  |                                                                 |
+| `String AdapterName { get; init; }`                                                                                                                                                                                      |                                                                 |
+| `Boolean OutputSpecific { get; init; }`                                                                                                                                                                                  |                                                                 |
+| `Boolean Supported { get; init; }`                                                                                                                                                                                       |                                                                 |
+| `IReadOnlyList<GpuScaledResolution> Modes { get; init; }`                                                                                                                                                                |                                                                 |
+| `String Detail { get; init; }`                                                                                                                                                                                           |                                                                 |
+
+## GpuScaledResolutionResult
+
+Namespace: `LibGPUDriverInteract`.
+
+An edit result; a potentially completed write is never automatically retried.
+
+| Member                                                                                                                  | Contract                                                                      |
+| ----------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------- |
+| `GpuScaledResolutionResult(Boolean Accepted, Boolean Changed, GpuScaledResolutionActivation Activation, String Detail)` | An edit result; a potentially completed write is never automatically retried. |
+| `Boolean Accepted { get; init; }`                                                                                       |                                                                               |
+| `Boolean Changed { get; init; }`                                                                                        |                                                                               |
+| `GpuScaledResolutionActivation Activation { get; init; }`                                                               |                                                                               |
+| `String Detail { get; init; }`                                                                                          |                                                                               |
 
 ## GpuSection
 
@@ -491,17 +650,17 @@ Namespace: `LibGPUDriverInteract`.
 
 A typed driver setting value.
 
-| Member                                 | Contract                                                              |
-| -------------------------------------- | --------------------------------------------------------------------- |
-| `GpuValue()`                           |                                                                       |
-| `GpuValueKind Kind { get; init; }`     | The field carrying this value.                                        |
-| `Boolean? BooleanValue { get; init; }` | The Boolean field.                                                    |
-| `Int32? IntegerValue { get; init; }`   | The integer field.                                                    |
-| `String ChoiceValue { get; init; }`    | The named option field.                                               |
-| `GpuValue None()`                      | Creates a value with no payload. The empty value.                     |
-| `GpuValue Boolean(Boolean value)`      | Creates a Boolean value. `value`: The payload. The typed value.       |
-| `GpuValue Integer(Int32 value)`        | Creates an integer value. `value`: The payload. The typed value.      |
-| `GpuValue Choice(String value)`        | Creates a named choice. `value`: The machine option. The typed value. |
+| Member                                 | Contract                                                                                                             |
+| -------------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
+| `GpuValue()`                           |                                                                                                                      |
+| `GpuValueKind Kind { get; init; }`     | The field carrying this value.                                                                                       |
+| `Boolean? BooleanValue { get; init; }` | The Boolean field.                                                                                                   |
+| `Int32? IntegerValue { get; init; }`   | The integer field.                                                                                                   |
+| `String ChoiceValue { get; init; }`    | The named option field.                                                                                              |
+| `GpuValue None()`                      | Creates a value with no payload. The empty value.                                                                    |
+| `GpuValue Boolean(Boolean value)`      | Creates a Boolean value; both values are shared, so a read allocates nothing. `value`: The payload. The typed value. |
+| `GpuValue Integer(Int32 value)`        | Creates an integer value. `value`: The payload. The typed value.                                                     |
+| `GpuValue Choice(String value)`        | Creates a named choice. `value`: The machine option. The typed value.                                                |
 
 ## GpuValueKind
 
@@ -527,3 +686,31 @@ The installed driver family to open.
 | `Intel`  | `0`           | Intel Graphics Control Library. |
 | `Amd`    | `1`           | AMD ADLX.                       |
 | `Nvidia` | `2`           | NVIDIA NVAPI and DRS.           |
+
+## GpuVrrSolution
+
+Namespace: `LibGPUDriverInteract`.
+
+One of Intel's variable refresh frame rate solutions.
+
+| Value           | Numeric value | Meaning                                                                          |
+| --------------- | ------------- | -------------------------------------------------------------------------------- |
+| `LowFrameRate`  | `0`           | The low frame rate solution (LFC), which repeats frames below the panel's range. |
+| `HighFrameRate` | `1`           | The high frame rate solution.                                                    |
+
+## GpuVrrSolutions
+
+Namespace: `LibGPUDriverInteract`.
+
+Intel's variable refresh state for the adapter driving a display, from its private VRR escape.
+`Supported`: Whether the adapter reports variable refresh support. `Enabled`: Whether variable
+refresh is enabled. `LowFrameRate`: Whether the low frame rate solution (LFC) is on.
+`HighFrameRate`: Whether the high frame rate solution is on.
+
+| Member                                                                                             | Contract                                                                                                                                                                                                                                                                                                                                        |
+| -------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `GpuVrrSolutions(Boolean Supported, Boolean Enabled, Boolean LowFrameRate, Boolean HighFrameRate)` | Intel's variable refresh state for the adapter driving a display, from its private VRR escape. `Supported`: Whether the adapter reports variable refresh support. `Enabled`: Whether variable refresh is enabled. `LowFrameRate`: Whether the low frame rate solution (LFC) is on. `HighFrameRate`: Whether the high frame rate solution is on. |
+| `Boolean Supported { get; init; }`                                                                 | Whether the adapter reports variable refresh support.                                                                                                                                                                                                                                                                                           |
+| `Boolean Enabled { get; init; }`                                                                   | Whether variable refresh is enabled.                                                                                                                                                                                                                                                                                                            |
+| `Boolean LowFrameRate { get; init; }`                                                              | Whether the low frame rate solution (LFC) is on.                                                                                                                                                                                                                                                                                                |
+| `Boolean HighFrameRate { get; init; }`                                                             | Whether the high frame rate solution is on.                                                                                                                                                                                                                                                                                                     |

@@ -404,6 +404,56 @@ internal sealed class ArcSyncDisplay
             : IgclResult.Success;
     }
 
+    /// <summary>Reads the profile the driver runs now, and the one beneath a fixed rate this library holds.</summary>
+    /// <param name="profile">The profile the driver runs.</param>
+    /// <param name="beforeFixed">While a rate is fixed, the profile captured before the first fixed write.</param>
+    /// <returns>The driver result of the profile read.</returns>
+    public int ReadState(out CtlArcSyncProfileParams profile, out CtlArcSyncProfileParams? beforeFixed)
+    {
+        beforeFixed = _store.Get(Instance)?.Before;
+        return ReadProfile(out profile);
+    }
+
+    /// <summary>Writes a profile for the policy that owns Arc Sync, beneath any fixed refresh rate.</summary>
+    /// <param name="request">The profile, written as given.</param>
+    /// <param name="admission">Rechecked before the setter.</param>
+    /// <param name="heldByFixed">Whether a fixed rate this library holds kept the write from being sent.</param>
+    /// <returns>The driver result; success when nothing was sent.</returns>
+    /// <remarks>
+    ///     A fixed rate the driver still runs is left in place, and the policy supplies the profile as the release's
+    ///     baseline instead (<see cref="SetBaseline" />). A record whose rate the driver no longer runs is somebody
+    ///     else's change, so it is dropped and the profile written. The write is remembered as the profile enabling
+    ///     returns to, and it does not hand the profile to the user the way an Arc Sync row does.
+    /// </remarks>
+    public int WritePolicyProfile(CtlArcSyncProfileParams request, WriteAdmission admission, out bool heldByFixed)
+    {
+        heldByFixed = false;
+        if (_store.Get(Instance) is { } record)
+        {
+            if (_profile.Read(out var current) == IgclResult.Success && record.Matches(current))
+            {
+                heldByFixed = true;
+                _log.Info("arcsync", $"{_name}: profile {request.Profile} not written; the refresh rate is fixed at "
+                                     + $"{record.FixedHz:0.###} Hz.");
+                return IgclResult.Success;
+            }
+
+            _store.Remove(Instance);
+        }
+
+        var result = _profile.Write(request, admission);
+        if (result == IgclResult.Success)
+        {
+            Remember(request);
+        }
+
+        _log.Info("arcsync",
+            $"{_name}: profile {request.Profile} (min {request.MinimumHz:0.###}, max {request.MaximumHz:0.###} Hz, "
+            + $"+{request.MaxFrameTimeIncreaseUs}/-{request.MaxFrameTimeDecreaseUs} us) for the owning policy: "
+            + $"{IgclResult.Describe(result)}.");
+        return result;
+    }
+
     /// <summary>Supplies the profile a released fixed rate returns to, or null for the captured one.</summary>
     /// <param name="baseline">The profile.</param>
     public void SetBaseline(CtlArcSyncProfileParams? baseline)
