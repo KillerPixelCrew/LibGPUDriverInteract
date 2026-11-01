@@ -17,6 +17,12 @@ ValueTask<GpuCommandResult> ExecuteAsync(GpuCommand command,
 ValueTask<GpuProfileSyncResult> SyncApplicationProfilesAsync(GpuProfileSync sync,
     CancellationToken cancellationToken = default);
 ValueTask RefreshTopologyAsync(CancellationToken cancellationToken = default);
+ValueTask<GpuRefreshRateRange?> ReadRefreshRateRangeAsync(GpuDisplayTarget display,
+    CancellationToken cancellationToken = default);
+ValueTask<GpuRefreshRateResult> SetRefreshRateAsync(GpuDisplayTarget display, double refreshHz,
+    CancellationToken cancellationToken = default);
+ValueTask<GpuRefreshRateResult> RestoreRefreshRateAsync(GpuDisplayTarget display,
+    CancellationToken cancellationToken = default);
 ValueTask DisposeAsync();
 
 event Action<GpuDescriptorSet>? DescriptorsChanged;

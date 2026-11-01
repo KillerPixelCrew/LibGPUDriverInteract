@@ -221,6 +221,31 @@ publishing thread. Native writes are never retried.
 | `ValueTask<GpuCommandResult> ExecuteAsync(GpuCommand command, CancellationToken cancellationToken = null/default)`                      | Dispatches one typed request without automatic retry or rollback.                                                                                                 |
 | `ValueTask<GpuProfileSyncResult> SyncApplicationProfilesAsync(GpuProfileSync sync, CancellationToken cancellationToken = null/default)` | Synchronizes the complete desired set of native application profiles.                                                                                             |
 | `ValueTask RefreshTopologyAsync(CancellationToken cancellationToken = null/default)`                                                    | Rediscovers adapters and displays after an explicit topology notification. A lost session reopens here or on the next explicit command, never on a polling pass.  |
+| `ValueTask<GpuRefreshRateRange> ReadRefreshRateRangeAsync(GpuDisplayTarget display, CancellationToken cancellationToken = null/default)` | The range a refresh rate can be fixed in without a Windows mode change, or null. Intel only: the monitor's Arc Sync range. |
+| `ValueTask<GpuRefreshRateResult> SetRefreshRateAsync(GpuDisplayTarget display, Double refreshHz, CancellationToken cancellationToken = null/default)` | Holds the display at a rate, fractions allowed, clamped to that range. Intel writes the Custom Arc Sync profile with both bounds at the rate. Never retried. |
+| `ValueTask<GpuRefreshRateResult> RestoreRefreshRateAsync(GpuDisplayTarget display, CancellationToken cancellationToken = null/default)` | Puts back the profile in use before the first fixed rate. Unchanged when no rate is fixed or the profile was changed since. |
+
+## GpuRefreshRateRange
+
+Namespace: `LibGPUDriverInteract`.
+
+`GpuRefreshRateRange(Display, MinimumHz, MaximumHz, FixedHz)`: the monitor's reported range and the rate
+this owner holds now, or null.
+
+## GpuRefreshRateOutcome
+
+| Value       | Numeric value | Meaning                                                      |
+| ----------- | ------------- | ------------------------------------------------------------ |
+| `Applied`   | `0`           | The driver accepted the setter.                              |
+| `Unchanged` | `1`           | Nothing needed writing.                                      |
+| `Refused`   | `2`           | Refused, or the driver answered with a failure. Not retried. |
+
+## GpuRefreshRateResult
+
+Namespace: `LibGPUDriverInteract`.
+
+`GpuRefreshRateResult(Outcome, RefreshHz, Detail)`: the outcome, the rate now fixed after clamping or
+null, and a sentence for the log.
 
 ## GpuHealth
 

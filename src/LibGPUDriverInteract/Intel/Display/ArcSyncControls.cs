@@ -179,6 +179,14 @@ internal readonly record struct ArcSyncBounds(int MinimumHz, int MaximumHz, int 
 ///         its own refresh range and frame time limits in the same structure. That path follows
 ///         <c>Samples/IntelArcSync</c> and is blind.
 ///     </para>
+///     <para>
+///         A fixed refresh rate is the same Custom profile with its minimum and maximum both set to the rate,
+///         which makes the driver run the panel at exactly that rate, fractions included. The profile in use
+///         before the first fixed write is kept in <see cref="FixedRefreshStore" />, on disk as well, so
+///         <see cref="RestoreRate" />, the session's close and the next session's start can put it back. While
+///         a rate is fixed, reads of the fixed profile are not remembered as the user's own profile, and any
+///         write through the Arc Sync rows hands the profile back to the user.
+///     </para>
 /// </remarks>
 internal sealed class ArcSyncDisplay
 {
@@ -190,13 +198,21 @@ internal sealed class ArcSyncDisplay
     public const int ProfileVesa = 6;
     public const int ProfileCustom = 7;
 
+    private readonly IDriverSink _log;
+    private readonly string _name;
     private readonly IgclSource<CtlArcSyncProfileParams> _profile;
+    private readonly FixedRefreshStore _store;
     private CtlArcSyncProfileParams? _custom;
     private CtlArcSyncProfileParams? _restore;
 
-    private ArcSyncDisplay(IgclSource<CtlArcSyncProfileParams> profile, CtlArcSyncMonitorParams monitor)
+    private ArcSyncDisplay(IgclSource<CtlArcSyncProfileParams> profile, CtlArcSyncMonitorParams monitor,
+        FixedRefreshStore store, string instance, string name, IDriverSink log)
     {
         _profile = profile;
+        _store = store;
+        Instance = instance;
+        _name = name;
+        _log = log;
         Monitor = monitor;
         Bounds = ArcSyncBounds.From(monitor);
     }
@@ -207,13 +223,26 @@ internal sealed class ArcSyncDisplay
     /// <summary>What a Custom profile may use, or null when the monitor's range does not allow one.</summary>
     public ArcSyncBounds? Bounds { get; }
 
+    /// <summary>The display's stable instance id, which keys its fixed-rate record.</summary>
+    public string Instance { get; }
+
+    /// <summary>Whether the monitor reports a refresh range a fixed rate can be chosen from.</summary>
+    public bool RateRangeAvailable => float.IsFinite(Monitor.MinimumHz) && float.IsFinite(Monitor.MaximumHz)
+                                      && Monitor.MinimumHz > 0 && Monitor.MaximumHz >= Monitor.MinimumHz;
+
+    /// <summary>The rate this library fixed and has not put back, or null.</summary>
+    public float? FixedHz => _store.Get(Instance)?.FixedHz;
+
     /// <summary>Builds the state when the monitor supports Arc Sync.</summary>
     /// <param name="session">The session.</param>
     /// <param name="output">The output.</param>
     /// <param name="log">Receives the decision.</param>
     /// <param name="name">The display name for the trace.</param>
+    /// <param name="store">The fixed-rate records; a private in-memory one when null.</param>
+    /// <param name="instance">The display's stable instance id; the name when null.</param>
     /// <returns>The state, or null when variable refresh is not offered.</returns>
-    public static unsafe ArcSyncDisplay? TryCreate(IgclSession session, IgclOutput output, IDriverSink log, string name)
+    public static unsafe ArcSyncDisplay? TryCreate(IgclSession session, IgclOutput output, IDriverSink log, string name,
+        FixedRefreshStore? store = null, string? instance = null)
     {
         var api = session.Api;
         if (api.GetArcSyncInfo is null || api.GetArcSyncProfile is null || api.SetArcSyncProfile is null)
@@ -232,7 +261,7 @@ internal sealed class ArcSyncDisplay
         ArcSyncDisplay display = new(
             new IgclSource<CtlArcSyncProfileParams>(session, output.Handle, api.GetArcSyncProfile,
                 api.SetArcSyncProfile, default),
-            monitor);
+            monitor, store ?? FixedRefreshStore.Load(null, log), instance ?? name, name, log);
         _ = display.ReadProfile(out _);
         log.Info(
             "arcsync",
@@ -266,7 +295,7 @@ internal sealed class ArcSyncDisplay
         _ = ReadProfile(out _);
         var request = _restore ?? default;
         request.Profile = enabled ? _restore?.Profile ?? ProfileRecommended : ProfileOff;
-        return Set(request, admission);
+        return SetForUser(request, admission);
     }
 
     /// <summary>Writes a named profile, or Custom with the last custom values seen.</summary>
@@ -277,7 +306,7 @@ internal sealed class ArcSyncDisplay
     {
         var request = profile == ProfileCustom ? CustomBase() : MonitorProfile();
         request.Profile = profile;
-        return Set(request, admission);
+        return SetForUser(request, admission);
     }
 
     /// <summary>Writes one value of the Custom profile, carrying the others.</summary>
@@ -308,7 +337,111 @@ internal sealed class ArcSyncDisplay
         }
 
         request.Profile = ProfileCustom;
-        return ControlWrite.From(Set(request, admission), $"the Custom Arc Sync {field}");
+        return ControlWrite.From(SetForUser(request, admission), $"the Custom Arc Sync {field}");
+    }
+
+    /// <summary>Runs the panel at one refresh rate: the Custom profile with its minimum and maximum both at it.</summary>
+    /// <param name="hz">The rate; brought inside the monitor's reported range.</param>
+    /// <param name="admission">Rechecked after preparatory reads and before the setter.</param>
+    /// <param name="applied">The rate the request carried after clamping.</param>
+    /// <returns>The driver result.</returns>
+    /// <remarks>
+    ///     The first fixed write captures the profile in use and records it before the setter runs, so a
+    ///     process that never reaches <see cref="RestoreRate" /> still leaves the record the next session
+    ///     restores from. Without a readable profile nothing is written, because nothing could be put back.
+    ///     The frame time limits are carried from that captured profile.
+    /// </remarks>
+    public int WriteFixedRate(float hz, WriteAdmission admission, out float applied)
+    {
+        applied = Math.Clamp(hz, Monitor.MinimumHz, Monitor.MaximumHz);
+        var record = _store.Get(Instance);
+        var captured = record is null;
+        if (record is null)
+        {
+            var read = _profile.Read(out var before);
+            if (read != IgclResult.Success)
+            {
+                _log.Warn("arcsync", $"{_name}: refresh rate {hz:0.###} Hz not fixed; the profile in use could "
+                                     + $"not be read to put back later ({IgclResult.Describe(read)}).");
+                return read;
+            }
+
+            Remember(before);
+            record = FixedRefreshRecord.Capture(before, applied);
+        }
+
+        record = record with { FixedHz = applied };
+        _store.Set(Instance, record);
+        var request = record.Before;
+        request.Profile = ProfileCustom;
+        request.MinimumHz = applied;
+        request.MaximumHz = applied;
+        var result = _profile.Write(request, admission);
+        if (result != IgclResult.Success && captured)
+        {
+            _store.Remove(Instance);
+        }
+
+        _log.Info("arcsync",
+            $"{_name}: refresh rate {applied:0.###} Hz through the Custom profile (min {request.MinimumHz:0.###}, "
+            + $"max {request.MaximumHz:0.###} Hz; restores profile {record.Profile}): {IgclResult.Describe(result)}.");
+        return result;
+    }
+
+    /// <summary>Puts back the profile in use before the first fixed write, when a rate is still fixed.</summary>
+    /// <param name="admission">Rechecked before the setter.</param>
+    /// <param name="wrote">Whether a setter was dispatched.</param>
+    /// <returns>The driver result; success when nothing was fixed.</returns>
+    /// <remarks>
+    ///     A profile somebody else changed since is theirs: when the driver no longer runs the fixed rate the
+    ///     record is dropped and nothing is written.
+    /// </remarks>
+    public int RestoreRate(WriteAdmission admission, out bool wrote)
+    {
+        wrote = false;
+        return _store.Get(Instance) is { } record
+            ? Restore(record, admission, out wrote, () => _store.Remove(Instance))
+            : IgclResult.Success;
+    }
+
+    /// <summary>Restores a fixed rate a previous process left behind, once per session.</summary>
+    /// <param name="admission">Rechecked before the setter.</param>
+    public void RecoverStale(WriteAdmission admission)
+    {
+        if (_store.TakeRecovered(Instance) is not { } record)
+        {
+            return;
+        }
+
+        _log.Info("arcsync", $"{_name}: a previous session left the refresh rate fixed at {record.FixedHz:0.###} Hz.");
+        _ = Restore(record, admission, out _, () => _store.ForgetRecovered(Instance));
+    }
+
+    private int Restore(FixedRefreshRecord record, WriteAdmission admission, out bool wrote, Action forget)
+    {
+        wrote = false;
+        if (_profile.Read(out var current) == IgclResult.Success && !record.Matches(current))
+        {
+            _log.Info("arcsync",
+                $"{_name}: the Arc Sync profile changed since the refresh rate was fixed; it is left as it is.");
+            forget();
+            return IgclResult.Success;
+        }
+
+        wrote = true;
+        var baseline = _store.Baseline(Instance) ?? record.Before;
+        var result = _profile.Write(baseline, admission);
+        if (result == IgclResult.Success)
+        {
+            forget();
+            Remember(baseline);
+        }
+
+        _log.Info("arcsync",
+            $"{_name}: fixed refresh rate {record.FixedHz:0.###} Hz released, profile {baseline.Profile} "
+            + $"(min {baseline.MinimumHz:0.###}, max {baseline.MaximumHz:0.###} Hz) restored: "
+            + $"{IgclResult.Describe(result)}.");
+        return result;
     }
 
     /// <summary>What a switch to Custom starts from: the last Custom values, else what the driver uses now.</summary>
@@ -343,11 +476,13 @@ internal sealed class ArcSyncDisplay
         return profile;
     }
 
-    private int Set(CtlArcSyncProfileParams request, WriteAdmission admission)
+    /// <summary>A write from an Arc Sync row: the user's own choice, which ends any fixed rate.</summary>
+    private int SetForUser(CtlArcSyncProfileParams request, WriteAdmission admission)
     {
         var result = _profile.Write(request, admission);
         if (result == IgclResult.Success)
         {
+            _store.Remove(Instance);
             Remember(request);
         }
 
@@ -356,6 +491,12 @@ internal sealed class ArcSyncDisplay
 
     private void Remember(CtlArcSyncProfileParams profile)
     {
+        // The fixed rate is this library's, not a profile the user chose.
+        if (_store.Get(Instance) is { } record && record.Matches(profile))
+        {
+            return;
+        }
+
         if (profile.Profile == ProfileCustom)
         {
             _custom = profile;

@@ -15,6 +15,7 @@ internal sealed partial class IntelSession : IDriverSession
     private readonly IReadOnlyList<AdapterClassEntry> _adapterKeys;
     private readonly IgclApi _api;
     private readonly ColorStore _colors;
+    private readonly FixedRefreshStore _fixedRefresh;
     private readonly IDriverSink _log;
     private readonly IntelGraphicsMemoryTransport _memory;
     private readonly ApplicationProfileSynchronizer _profiles;
@@ -41,6 +42,7 @@ internal sealed partial class IntelSession : IDriverSession
             _adapterKeys = AdapterClassKey.Enumerate(registry, AdapterClassKey.ClassPath, _log);
             _memory = memory ?? new IntelGraphicsMemoryTransport(_log, _adapterKeys);
             _colors = ColorStore.Load(stateDirectory, _log);
+            _fixedRefresh = FixedRefreshStore.Load(stateDirectory, _log);
             _profiles = new ApplicationProfileSynchronizer(registry, stateDirectory, _log);
             _log.Info("lifecycle", $"IGCL 0x{_session.SupportedVersion:x} open: {_session.Adapters.Count} adapter(s), "
                                    + $"{_session.Outputs.Count} connected display(s).");
@@ -63,7 +65,13 @@ internal sealed partial class IntelSession : IDriverSession
     {
         EnsureSession();
         _session.RefreshOutputs();
-        _model = IntelModel.Build(_session, _memory, _colors, _adapterKeys, _log);
+        _model = IntelModel.Build(_session, _memory, _colors, _adapterKeys, _fixedRefresh, _log);
+        // A rate a previous process fixed and never put back is restored as each display is first found.
+        foreach (var display in _model.ArcSyncDisplays)
+        {
+            display.RecoverStale(Unbounded);
+        }
+
         return new DriverModel(_model.Sections,
             _model.Controls.Select(control => (DriverControl)new Control(control, _session)).ToArray());
     }
@@ -81,6 +89,23 @@ internal sealed partial class IntelSession : IDriverSession
 
     public void Dispose()
     {
+        // Never strand the panel at a rate nobody owns any more: every fixed rate goes back as the session
+        // closes. A lost session cannot write; its records stay on disk for the next session to restore.
+        if (!_session.Lost && _model is not null)
+        {
+            foreach (var display in _model.ArcSyncDisplays.Where(display => display.FixedHz is not null))
+            {
+                try
+                {
+                    _ = display.RestoreRate(Unbounded, out _);
+                }
+                catch (Exception error) when (error is not OutOfMemoryException)
+                {
+                    _log.Warn("arcsync", "Fixed refresh rate release at close: " + DriverLog.Describe(error));
+                }
+            }
+        }
+
         try
         {
             _session.Dispose();

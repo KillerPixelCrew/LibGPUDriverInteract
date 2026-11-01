@@ -42,6 +42,30 @@ Source fixtures cover native ABI, BCD data preservation, NVIDIA group removal, m
 and storage kinds. Their execution and new vendor hardware acceptance are deferred to the owning
 application's manual-first validation batch. No new hardware result is claimed here.
 
+## Fixed refresh rates
+
+`ReadRefreshRateRangeAsync`, `SetRefreshRateAsync` and `RestoreRefreshRateAsync` hold one display at a
+refresh rate without a Windows mode change. They run on the owner's serialized lane. Only Intel
+implements them, through the Arc Sync Custom profile (`CTL_INTEL_ARC_SYNC_PROFILE_CUSTOM` and its parameters at `igcl_api.h`
+lines 3933-3953, setter at line 3994): `ctlSetIntelArcSyncProfile` with `MinRefreshRateInHz` and `MaxRefreshRateInHz` both at
+the requested rate makes the driver run the panel at that rate, fractional rates such as 59.94
+included. The range comes from `ctlGetIntelArcSyncInfoForMonitor` (`MinimumRefreshRateInHz` and
+`MaximumRefreshRateInHz`), and a request outside it is clamped into it. Every fixed write logs the
+profile, its bounds and the driver result under `arcsync`.
+
+The first fixed write reads the profile in use and records it in `arc-sync-fixed-refresh.v1.json` in
+the state directory before the setter runs. Without a readable profile nothing is written. Restore
+writes that profile back, or a baseline the owning policy supplied for the display, and removes the
+record. A profile changed since by anyone else is left alone and the record dropped. A write through
+an Arc Sync row (variable refresh, profile or a Custom value) is the user's and ends the fixed rate.
+Reads of the fixed profile are never remembered as the profile variable refresh returns to.
+
+The Arc Sync profile is persistent driver state, so a fixed rate must not outlive its owner. Closing the
+Intel session restores every fixed rate. A record a previous process left behind is restored once
+when its display is next discovered, if the driver still runs that rate. A lost session cannot write;
+its record waits for the next session. This path follows Intel's header and the maintainer's earlier
+manual use of the Custom profile; it has no recorded hardware acceptance yet.
+
 ## Physical output controls
 
 NVIDIA publishes `display.gsync` separately for each supported physical output, using

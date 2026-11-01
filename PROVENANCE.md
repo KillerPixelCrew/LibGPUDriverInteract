@@ -14,6 +14,10 @@ AMD/NVIDIA registry codecs. The GPL-3.0-or-later SRE 1.0 source was inspected on
 evidence; no SRE implementation code is incorporated. [Display mechanisms](docs/displays.md) records
 the upstream references, exact native layouts, preservation boundaries and deferred hardware proof.
 
+Fixed refresh rates use the Arc Sync Custom profile from the same public IGCL header, with both refresh
+bounds at the requested rate, as the WSGM maintainer set rates by hand before. No hardware result is
+recorded for this path yet; see [Display mechanisms](docs/displays.md#fixed-refresh-rates).
+
 - [Intel implementation provenance](https://github.com/KillerPixelCrew/WSGM/blob/1df3f4d8987fcff5f1c8f2554c489195f1cb8b13/src/WSGM.Plugin.IntelGpu/PROVENANCE.md):
   Intel Graphics Control Library headers/samples and dated observations.
 - [AMD implementation provenance](https://github.com/KillerPixelCrew/WSGM/blob/1df3f4d8987fcff5f1c8f2554c489195f1cb8b13/src/WSGM.Plugin.AmdGpu/PROVENANCE.md):

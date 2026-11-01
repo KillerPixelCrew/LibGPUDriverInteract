@@ -56,10 +56,23 @@ internal sealed unsafe class FakeIgclDriver
     internal uint[] DisplayFlags { get; set; } = [];
     internal float MinimumHz { get; set; } = 30;
     internal float MaximumHz { get; set; } = 120;
+    internal CtlArcSyncProfileParams ArcProfileState { get; set; } = RecommendedProfile();
+    internal ConcurrentQueue<CtlArcSyncProfileParams> ArcWrites { get; } = new();
+    internal int ArcReadResult { get; set; }
+    internal int ArcWriteResult { get; set; }
     internal uint ColorBlockCount { get; set; } = 1;
     internal int ColorWrites { get; private set; }
     internal ConcurrentQueue<uint> PowerWrites { get; } = new();
     internal Action? AfterPowerWrite { get; set; }
+
+    internal static CtlArcSyncProfileParams RecommendedProfile()
+    {
+        CtlArcSyncProfileParams profile = default;
+        profile.Profile = 1;
+        profile.MinimumHz = 30;
+        profile.MaximumHz = 120;
+        return profile;
+    }
 
     internal IgclSession OpenSession()
     {
@@ -196,17 +209,26 @@ internal sealed unsafe class FakeIgclDriver
         return IgclResult.Success;
     }
 
-    private static int ArcProfile(nint handle, CtlArcSyncProfileParams* profile)
+    private int ArcProfile(nint handle, CtlArcSyncProfileParams* profile)
     {
-        profile->Profile = 1;
-        profile->MinimumHz = 30;
-        profile->MaximumHz = 120;
+        if (ArcReadResult != IgclResult.Success)
+        {
+            return ArcReadResult;
+        }
+
+        *profile = ArcProfileState;
         return IgclResult.Success;
     }
 
-    private static int SetArcProfile(nint handle, CtlArcSyncProfileParams* profile)
+    private int SetArcProfile(nint handle, CtlArcSyncProfileParams* profile)
     {
-        return IgclResult.Success;
+        ArcWrites.Enqueue(*profile);
+        if (ArcWriteResult == IgclResult.Success)
+        {
+            ArcProfileState = *profile;
+        }
+
+        return ArcWriteResult;
     }
 
     private int ColorGet(nint handle, CtlPixTxPipeGetConfig* pipe)

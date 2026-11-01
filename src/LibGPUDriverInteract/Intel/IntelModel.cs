@@ -38,16 +38,30 @@ internal sealed class IntelModel
         Category(PowerCategory, "Power savings", 3)
     ];
 
+    private readonly Dictionary<nint, ArcSyncDisplay> _arcSync;
     private readonly Dictionary<string, INativeProfileTarget> _targets;
 
     private IntelModel(
         IReadOnlyList<IntelControl> controls,
         IReadOnlyList<GpuSection> sections,
-        Dictionary<string, INativeProfileTarget> targets)
+        Dictionary<string, INativeProfileTarget> targets,
+        Dictionary<nint, ArcSyncDisplay> arcSync)
     {
         Controls = controls;
         Sections = sections;
         _targets = targets;
+        _arcSync = arcSync;
+    }
+
+    /// <summary>Every display with Arc Sync, the ones a refresh rate can be fixed on.</summary>
+    public IReadOnlyCollection<ArcSyncDisplay> ArcSyncDisplays => _arcSync.Values;
+
+    /// <summary>The Arc Sync state of one output.</summary>
+    /// <param name="output">The output, from the session this model was built from.</param>
+    /// <returns>The state, or null when the output has no Arc Sync.</returns>
+    public ArcSyncDisplay? ArcSync(IgclOutput output)
+    {
+        return _arcSync.GetValueOrDefault(output.Handle);
     }
 
     /// <summary>Every published control, in publication order.</summary>
@@ -66,6 +80,7 @@ internal sealed class IntelModel
     /// <param name="memory">The shared-memory transport.</param>
     /// <param name="colors">The colour record.</param>
     /// <param name="adapterKeys">The display adapter class, enumerated once per session.</param>
+    /// <param name="fixedRefresh">The session's fixed refresh-rate records.</param>
     /// <param name="log">Receives every decision.</param>
     /// <returns>The model; empty when the driver offers nothing.</returns>
     /// <remarks>
@@ -76,9 +91,11 @@ internal sealed class IntelModel
         IntelGraphicsMemoryTransport memory,
         ColorStore colors,
         IReadOnlyList<AdapterClassEntry> adapterKeys,
+        FixedRefreshStore fixedRefresh,
         IDriverSink log)
     {
         List<IntelControl> controls = [];
+        Dictionary<nint, ArcSyncDisplay> arcSync = [];
         List<GpuSection> sections = [];
         Dictionary<string, INativeProfileTarget> targets = new(StringComparer.Ordinal);
         var several = session.Adapters.Count > 1;
@@ -121,12 +138,17 @@ internal sealed class IntelModel
 
             var sectionId = $"display-{ValueMapping.Fingerprint(identity.InstanceId)}";
             List<IntelControl> built = [];
-            BuildDisplay(session, output, identity, sectionId, ref semanticVrrTaken, colors, built, log);
+            if (BuildDisplay(session, output, identity, sectionId, ref semanticVrrTaken, colors, fixedRefresh, built,
+                    log) is { } display)
+            {
+                arcSync[output.Handle] = display;
+            }
+
             Section(sectionId, name, "Intel display settings", GpuSectionKind.Display, DisplayCategories, built,
                 controls, sections, identity.Target);
         }
 
-        return new IntelModel(controls, sections, targets);
+        return new IntelModel(controls, sections, targets, arcSync);
     }
 
     /// <summary>The stable instance id of an adapter.</summary>
@@ -385,18 +407,20 @@ internal sealed class IntelModel
         }
     }
 
-    private static void BuildDisplay(
+    private static ArcSyncDisplay? BuildDisplay(
         IgclSession session,
         IgclOutput output,
         DisplayIdentity identity,
         string sectionId,
         ref bool semanticVrrTaken,
         ColorStore colors,
+        FixedRefreshStore fixedRefresh,
         List<IntelControl> controls,
         IDriverSink log)
     {
         var instance = identity.InstanceId;
-        if (ArcSyncDisplay.TryCreate(session, output, log, identity.Name) is { } arcSync)
+        var arcSync = ArcSyncDisplay.TryCreate(session, output, log, identity.Name, fixedRefresh, instance);
+        if (arcSync is not null)
         {
             // One display carries the variable refresh role, the one Steam's own toggle follows: the
             // built-in panel when it has variable refresh, otherwise the first display that does.
@@ -425,7 +449,7 @@ internal sealed class IntelModel
         var power = PowerSavingControls.SupportedFeatures(session, output);
         if (power == 0)
         {
-            return;
+            return arcSync;
         }
 
         var powerPlacement = new Placement(sectionId, PowerCategory, 0);
@@ -434,6 +458,8 @@ internal sealed class IntelModel
         {
             controls.AddRange(LaceControls.Build(session, output, instance, powerPlacement.Plus(50)));
         }
+
+        return arcSync;
     }
 
     private static GpuCategory Category(string id, string title, int order)
