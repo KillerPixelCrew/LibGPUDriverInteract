@@ -49,6 +49,27 @@ public sealed partial class GpuDriver
             () => Closed("Driver admission is closed."), cancellationToken).ConfigureAwait(false);
     }
 
+    /// <summary>
+    ///     Supplies the Arc Sync profile a released fixed refresh rate returns to on one display, instead of
+    ///     the profile captured before the first fixed rate.
+    /// </summary>
+    /// <param name="display">The display.</param>
+    /// <param name="baseline">The profile, or null to return to the captured one again.</param>
+    /// <param name="cancellationToken">Cancels the wait for the lane.</param>
+    /// <returns>Whether the display has Arc Sync and took the baseline; false on another vendor or display.</returns>
+    /// <remarks>
+    ///     For the one policy that owns the Arc Sync profile beneath a fixed rate, such as a variable refresh
+    ///     range it keeps. Nothing is written now: the baseline is what the next release, the session's close or
+    ///     the next start's recovery writes. It lasts for the session.
+    /// </remarks>
+    public async ValueTask<bool> SetRefreshRateBaselineAsync(GpuDisplayTarget display, GpuArcSyncBaseline? baseline,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(display);
+        return await OnLaneAsync(() => _runtime.SetRefreshRateBaseline(display, baseline), () => false,
+            cancellationToken).ConfigureAwait(false);
+    }
+
     private static GpuRefreshRateResult Closed(string detail)
     {
         return new GpuRefreshRateResult(GpuRefreshRateOutcome.Refused, null, detail);

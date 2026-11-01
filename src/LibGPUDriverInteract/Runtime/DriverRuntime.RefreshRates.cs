@@ -19,6 +19,19 @@ internal sealed partial class DriverRuntime
         }
     }
 
+    internal bool SetRefreshRateBaseline(GpuDisplayTarget display, GpuArcSyncBaseline? baseline)
+    {
+        try
+        {
+            return (_session as IntelSession)?.SetRefreshRateBaseline(display, baseline) ?? false;
+        }
+        catch (DriverFailure failure) when (failure.Lost)
+        {
+            Lose(failure.Message);
+            return false;
+        }
+    }
+
     internal GpuRefreshRateResult SetRefreshRate(GpuDisplayTarget display, double refreshHz, CancellationToken token)
     {
         return OnRefreshSession(token, session => session.SetRefreshRate(display, refreshHz,

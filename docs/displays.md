@@ -55,7 +55,8 @@ profile, its bounds and the driver result under `arcsync`.
 
 The first fixed write reads the profile in use and records it in `arc-sync-fixed-refresh.v1.json` in
 the state directory before the setter runs. Without a readable profile nothing is written. Restore
-writes that profile back, or a baseline the owning policy supplied for the display, and removes the
+writes that profile back, or the baseline the owning policy supplied for the display through
+`SetRefreshRateBaselineAsync` (for example a variable refresh range it keeps), and removes the
 record. A profile changed since by anyone else is left alone and the record dropped. A write through
 an Arc Sync row (variable refresh, profile or a Custom value) is the user's and ends the fixed rate.
 Reads of the fixed profile are never remembered as the profile variable refresh returns to.

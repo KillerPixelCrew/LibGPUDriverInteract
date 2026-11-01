@@ -193,6 +193,50 @@ public sealed class ArcSyncFixedRefreshTests
             (fixture.Native.ArcProfileState.Profile, fixture.Native.ArcProfileState.MinimumHz));
     }
 
+    [Fact]
+    public void APublicBaselineIsWhatTheNextReleaseWrites()
+    {
+        // The variable refresh range fix keeps Excellent with a 28 Hz floor beneath any fixed rate.
+        using var fixture = new Fixture(28, 120);
+        fixture.Display.SetBaseline(ArcSyncDisplay.ToNative(new GpuArcSyncBaseline(GpuArcSyncProfile.Excellent, 28,
+            120)));
+        fixture.Display.WriteFixedRate(60, Admitted, out _);
+
+        fixture.Display.RestoreRate(Admitted, out _);
+
+        Assert.Equal((ArcSyncDisplay.ProfileExcellent, 28f, 120f),
+            (fixture.Native.ArcProfileState.Profile, fixture.Native.ArcProfileState.MinimumHz,
+                fixture.Native.ArcProfileState.MaximumHz));
+    }
+
+    [Fact]
+    public void ClearingTheBaselineReturnsToTheCapturedProfile()
+    {
+        using var fixture = new Fixture();
+        var before = fixture.Native.ArcProfileState.Profile;
+        fixture.Display.SetBaseline(ArcSyncDisplay.ToNative(new GpuArcSyncBaseline(GpuArcSyncProfile.Excellent, 30,
+            120)));
+        fixture.Display.SetBaseline(null);
+        fixture.Display.WriteFixedRate(60, Admitted, out _);
+
+        fixture.Display.RestoreRate(Admitted, out _);
+
+        Assert.Equal(before, fixture.Native.ArcProfileState.Profile);
+    }
+
+    [Theory]
+    [InlineData(GpuArcSyncProfile.Recommended, ArcSyncDisplay.ProfileRecommended)]
+    [InlineData(GpuArcSyncProfile.Excellent, ArcSyncDisplay.ProfileExcellent)]
+    [InlineData(GpuArcSyncProfile.Good, ArcSyncDisplay.ProfileGood)]
+    [InlineData(GpuArcSyncProfile.Compatible, ArcSyncDisplay.ProfileCompatible)]
+    [InlineData(GpuArcSyncProfile.Off, ArcSyncDisplay.ProfileOff)]
+    [InlineData(GpuArcSyncProfile.Vesa, ArcSyncDisplay.ProfileVesa)]
+    [InlineData(GpuArcSyncProfile.Custom, ArcSyncDisplay.ProfileCustom)]
+    public void ThePublicProfilesAreTheDriversOwnValues(GpuArcSyncProfile profile, int native)
+    {
+        Assert.Equal(native, ArcSyncDisplay.ToNative(new GpuArcSyncBaseline(profile, 30, 120)).Profile);
+    }
+
     private sealed class Fixture : IDisposable
     {
         private readonly TemporaryDirectory? _directory;

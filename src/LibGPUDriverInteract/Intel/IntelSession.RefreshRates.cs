@@ -53,6 +53,18 @@ internal sealed partial class IntelSession
                 "Intel returned " + IgclResult.Describe(result) + "; the rate stays fixed.");
     }
 
+    internal bool SetRefreshRateBaseline(GpuDisplayTarget display, GpuArcSyncBaseline? baseline)
+    {
+        EnsureSession();
+        if (ArcSyncFor(display) is not { } arcSync)
+        {
+            return false;
+        }
+
+        arcSync.SetBaseline(baseline is null ? null : ArcSyncDisplay.ToNative(baseline));
+        return true;
+    }
+
     private ArcSyncDisplay? ArcSyncFor(GpuDisplayTarget display)
     {
         return FindOutput(display) is { } output ? _model?.ArcSync(output) : null;

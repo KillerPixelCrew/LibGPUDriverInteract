@@ -404,6 +404,31 @@ internal sealed class ArcSyncDisplay
             : IgclResult.Success;
     }
 
+    /// <summary>Supplies the profile a released fixed rate returns to, or null for the captured one.</summary>
+    /// <param name="baseline">The profile.</param>
+    public void SetBaseline(CtlArcSyncProfileParams? baseline)
+    {
+        _store.SetBaseline(Instance, baseline);
+        _log.Info("arcsync", baseline is { } profile
+            ? $"{_name}: a released fixed rate returns to profile {profile.Profile} "
+              + $"(min {profile.MinimumHz:0.###}, max {profile.MaximumHz:0.###} Hz)."
+            : $"{_name}: a released fixed rate returns to the profile in use before it.");
+    }
+
+    /// <summary>The native profile for a public baseline.</summary>
+    /// <param name="baseline">The baseline.</param>
+    /// <returns>The profile structure the setter takes.</returns>
+    public static CtlArcSyncProfileParams ToNative(GpuArcSyncBaseline baseline)
+    {
+        CtlArcSyncProfileParams profile = default;
+        profile.Profile = (int)baseline.Profile;
+        profile.MinimumHz = (float)baseline.MinimumHz;
+        profile.MaximumHz = (float)baseline.MaximumHz;
+        profile.MaxFrameTimeIncreaseUs = baseline.MaxFrameTimeIncreaseUs;
+        profile.MaxFrameTimeDecreaseUs = baseline.MaxFrameTimeDecreaseUs;
+        return profile;
+    }
+
     /// <summary>Restores a fixed rate a previous process left behind, once per session.</summary>
     /// <param name="admission">Rechecked before the setter.</param>
     public void RecoverStale(WriteAdmission admission)

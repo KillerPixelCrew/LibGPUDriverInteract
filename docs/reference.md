@@ -224,6 +224,7 @@ publishing thread. Native writes are never retried.
 | `ValueTask<GpuRefreshRateRange> ReadRefreshRateRangeAsync(GpuDisplayTarget display, CancellationToken cancellationToken = null/default)` | The range a refresh rate can be fixed in without a Windows mode change, or null. Intel only: the monitor's Arc Sync range. |
 | `ValueTask<GpuRefreshRateResult> SetRefreshRateAsync(GpuDisplayTarget display, Double refreshHz, CancellationToken cancellationToken = null/default)` | Holds the display at a rate, fractions allowed, clamped to that range. Intel writes the Custom Arc Sync profile with both bounds at the rate. Never retried. |
 | `ValueTask<GpuRefreshRateResult> RestoreRefreshRateAsync(GpuDisplayTarget display, CancellationToken cancellationToken = null/default)` | Puts back the profile in use before the first fixed rate. Unchanged when no rate is fixed or the profile was changed since. |
+| `ValueTask<Boolean> SetRefreshRateBaselineAsync(GpuDisplayTarget display, GpuArcSyncBaseline baseline, CancellationToken cancellationToken = null/default)` | Supplies the Arc Sync profile a released fixed rate returns to, or null for the captured one. Writes nothing now. False without Arc Sync on that display. |
 
 ## GpuRefreshRateRange
 
@@ -231,6 +232,14 @@ Namespace: `LibGPUDriverInteract`.
 
 `GpuRefreshRateRange(Display, MinimumHz, MaximumHz, FixedHz)`: the monitor's reported range and the rate
 this owner holds now, or null.
+
+## GpuArcSyncBaseline
+
+Namespace: `LibGPUDriverInteract`.
+
+`GpuArcSyncBaseline(Profile, MinimumHz, MaximumHz, MaxFrameTimeIncreaseUs = 0, MaxFrameTimeDecreaseUs = 0)`:
+the profile a released fixed rate returns to. `GpuArcSyncProfile` carries the driver's own values:
+`Recommended` 1, `Excellent` 2, `Good` 3, `Compatible` 4, `Off` 5, `Vesa` 6, `Custom` 7.
 
 ## GpuRefreshRateOutcome
 
