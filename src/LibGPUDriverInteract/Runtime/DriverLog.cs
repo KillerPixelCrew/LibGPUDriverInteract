@@ -12,6 +12,12 @@ internal static class DriverLog
         sink.Log(GpuLogLevel.Info, scope, message);
     }
 
+    /// <summary>Writes a discovery fact once: discovery runs again on every refresh and rarely finds anything new.</summary>
+    internal static void InfoOnce(this IDriverSink sink, string scope, string message)
+    {
+        sink.LogChange(GpuLogLevel.Info, scope, message, message);
+    }
+
     internal static void Warn(this IDriverSink sink, string scope, string message)
     {
         sink.Log(GpuLogLevel.Warn, scope, message);

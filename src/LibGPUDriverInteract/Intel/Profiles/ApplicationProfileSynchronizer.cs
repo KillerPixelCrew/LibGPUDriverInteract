@@ -259,7 +259,11 @@ internal sealed class ApplicationProfileSynchronizer
         }
 
         var removed = Remove(entries, wanted, failures, cancellationToken, admission);
-        _log.Info(Scope, $"Sync {sync.Revision}: {written} written, {removed} removed, {failures.Count} refused.");
+        if (written + removed + failures.Count > 0)
+        {
+            _log.Info(Scope, $"Sync {sync.Revision}: {written} written, {removed} removed, {failures.Count} refused.");
+        }
+
         return new GpuProfileSyncResult(written, removed, failures);
     }
 

@@ -254,7 +254,7 @@ internal sealed class ArcSyncDisplay
         var result = session.Call(api.GetArcSyncInfo, output.Handle, ref monitor);
         if (result != IgclResult.Success || monitor.IsSupported == 0)
         {
-            log.Info("arcsync", $"{name}: no variable refresh ({IgclResult.Describe(result)}).");
+            log.InfoOnce("arcsync", $"{name}: no variable refresh ({IgclResult.Describe(result)}).");
             return null;
         }
 
@@ -263,7 +263,7 @@ internal sealed class ArcSyncDisplay
                 api.SetArcSyncProfile, default),
             monitor, store ?? FixedRefreshStore.Load(null, log), instance ?? name, name, log);
         _ = display.ReadProfile(out _);
-        log.Info(
+        log.InfoOnce(
             "arcsync",
             $"{name}: variable refresh {monitor.MinimumHz:0}-{monitor.MaximumHz:0} Hz, frame time limits "
             + $"+{monitor.MaxFrameTimeIncreaseUs}/-{monitor.MaxFrameTimeDecreaseUs} us"

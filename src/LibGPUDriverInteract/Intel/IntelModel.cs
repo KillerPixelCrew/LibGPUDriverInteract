@@ -249,20 +249,20 @@ internal sealed class IntelModel
         foreach (var details in table)
         {
             var info = ThreeDFeatureCatalog.Describe(details.FeatureType);
-            log.Info(
+            log.InfoOnce(
                 "graphics",
                 $"Adapter {adapter.Index} feature {details.FeatureType} ({info.Label}): type {details.ValueType}, "
                 + $"per-app {details.PerAppSupport}, misc 0x{details.FeatureMiscSupport:x}, "
                 + $"mask 0x{details.Value.EnumSupportedTypes:x}.");
             if (ThreeDFeatureCatalog.SkipReason(details.FeatureType) is { } reason)
             {
-                log.Info("graphics", $"{info.Label} is not published: {reason}.");
+                log.InfoOnce("graphics", $"{info.Label} is not published: {reason}.");
                 continue;
             }
 
             if (Shape(details) is not { } shape)
             {
-                log.Info("graphics", $"{info.Label} reports value type {details.ValueType}, which this package "
+                log.InfoOnce("graphics", $"{info.Label} reports value type {details.ValueType}, which this package "
                                      + "cannot read without guessing; not published.");
                 continue;
             }
@@ -377,21 +377,21 @@ internal sealed class IntelModel
                 var tierTypes = session.TryReadCustomCaps<Ctl3dAppProfilesCaps>(adapter, details, out var caps)
                     ? caps.SupportedTierTypes
                     : 0;
-                log.Info("graphics", $"{info.Label}: tier types 0x{tierTypes:x}.");
+                log.InfoOnce("graphics", $"{info.Label}: tier types 0x{tierTypes:x}.");
                 foreach (var type in ThreeDFeatureCatalog.TierTypes(tierTypes))
                 {
                     ThreeDFeature feature = new(session, adapter, details, info, shape) { TierType = type.Value };
                     var result = feature.ReadAppProfile(null, out var profile);
                     if (result is not (IgclResult.Success or IgclResult.DataNotFound))
                     {
-                        log.Info("graphics",
+                        log.InfoOnce("graphics",
                             $"{type.Id} is not published: the driver answered {IgclResult.Describe(result)}.");
                         continue;
                     }
 
                     feature.SupportedTierProfiles = profile.SupportedTierProfiles;
                     feature.DefaultEnabledTierProfiles = profile.DefaultEnabledTierProfiles;
-                    log.Info(
+                    log.InfoOnce(
                         "graphics",
                         $"{type.Id}: supported 0x{profile.SupportedTierProfiles:x}, default "
                         + $"0x{profile.DefaultEnabledTierProfiles:x}, enabled 0x{profile.EnabledTierProfiles:x} "
