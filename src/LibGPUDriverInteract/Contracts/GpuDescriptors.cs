@@ -58,6 +58,17 @@ public sealed record GpuDescriptor
 
     /// <summary>Legal named options.</summary>
     public IReadOnlyList<GpuChoice> Choices { get; init; } = [];
+
+    /// <summary>
+    ///     A Boolean control on the same instance that the driver's vendor pairs with this one, or null.
+    /// </summary>
+    /// <remarks>
+    ///     A consumer turning this control on turns the prerequisite on first, and orders a profile pass so
+    ///     the prerequisite is written before this control. Turning this control off leaves the
+    ///     prerequisite alone. The library writes only the control it is commanded to; the pairing is
+    ///     vendor guidance, not a write the library performs on its own.
+    /// </remarks>
+    public string? Prerequisite { get; init; }
 }
 
 /// <summary>One legal named option.</summary>

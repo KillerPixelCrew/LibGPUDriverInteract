@@ -43,9 +43,10 @@ shown as applied.
 
 AMD's AFMF and RSR interfaces are service-wide: ADLX exposes them once for every GPU rather than per
 adapter. Each AFMF control is still published per GPU instance, beside that GPU's Radeon Anti-Lag.
-Handheld Companion turns Anti-Lag on whenever it turns AFMF on, and AMD recommends the pair; a
-consumer offering AFMF should write `graphics.anti-lag` on the same instance first. The library
-writes only the control it is commanded to.
+Handheld Companion turns Anti-Lag on whenever it turns AFMF on, and AMD recommends the pair. The
+`graphics.afmf` descriptor names `graphics.anti-lag` as its `Prerequisite`, so a consumer turning
+AFMF on writes Anti-Lag on the same instance first. The library writes only the control it is
+commanded to.
 
 GpuReason.Retryable describes whether a fresh user action might succeed; it never authorizes an
 automatic retry. Identical display writes can retrain a link, so do not apply them as support probes

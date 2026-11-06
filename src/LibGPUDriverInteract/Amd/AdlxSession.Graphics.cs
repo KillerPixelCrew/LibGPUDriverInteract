@@ -88,7 +88,10 @@ internal sealed partial class AdlxSession
         });
         Feature("IADLX3DSettingsServices1", 17, "afmf", feature =>
         {
-            Toggle(feature, "afmf", "AMD Fluid Motion Frames", 4, 5);
+            // AMD recommends Radeon Anti-Lag with AFMF, and Handheld Companion added Anti-Lag solely to turn it
+            // on with AFMF: there AFMF works on the devices where an AFMF write alone was refused with
+            // ADLX_FAIL. The pair is published as AFMF's prerequisite.
+            Toggle(feature, "afmf", "AMD Fluid Motion Frames", 4, 5, prerequisite: "graphics.anti-lag");
             var advanced = feature with { FeatureInterface = "IADLX3DAMDFluidMotionFrames1" };
             if (advanced.TryUse(target => AdlxNative.Boolean(target.Pointer, 6), out var supported) && supported)
             {
@@ -154,9 +157,11 @@ internal sealed partial class AdlxSession
         }
 
         void Toggle(AdlxGraphicsFeature feature, string id, string label, int read, int write,
-            GpuProfileScope scope = GpuProfileScope.Switched)
+            GpuProfileScope scope = GpuProfileScope.Switched, string? prerequisite = null)
         {
-            controls.Add(new DelegateControl(DriverDescriptors.Toggle("graphics." + id, instance, label, section, scope),
+            var descriptor = DriverDescriptors.Toggle("graphics." + id, instance, label, section, scope)
+                with { Prerequisite = prerequisite };
+            controls.Add(new DelegateControl(descriptor,
                 () => feature.Use(target => GpuValue.Boolean(AdlxNative.Boolean(target.Pointer, read))),
                 (value, admission) => feature.Use(target =>
                 {
