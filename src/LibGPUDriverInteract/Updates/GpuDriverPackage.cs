@@ -1,10 +1,15 @@
+using System.Globalization;
+using System.Security.Cryptography;
+using System.Text;
+
 namespace LibGPUDriverInteract;
 
 /// <summary>A package selected from a vendor's official catalog for one exact adapter.</summary>
-public sealed class GpuDriverPackage
+public sealed record GpuDriverPackage
 {
-    internal GpuDriverPackage(GpuInstalledDriver adapter, string version, DateTime date, Uri download,
-        Uri details, string notes, long size, string? checksum, string arguments)
+    /// <summary>Creates immutable package metadata; installation independently verifies the file and expected vendor signer.</summary>
+    public GpuDriverPackage(GpuInstalledDriver adapter, string version, DateTime date, Uri download,
+        Uri details, string notes, long size, string? checksum)
     {
         if (size is <= 0 or >= 4L * 1024 * 1024 * 1024)
         {
@@ -19,7 +24,8 @@ public sealed class GpuDriverPackage
         ReleaseNotes = notes;
         Size = size;
         Checksum = checksum;
-        Arguments = arguments;
+        Identity = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(string.Join('\0',
+            adapter.InstanceId, version, download.AbsoluteUri, size.ToString(CultureInfo.InvariantCulture), checksum ?? ""))));
     }
 
     /// <summary>The installed adapter this package was selected for.</summary>
@@ -38,5 +44,6 @@ public sealed class GpuDriverPackage
     public long Size { get; }
     /// <summary>Published hexadecimal checksum, or null when the source supplies none.</summary>
     public string? Checksum { get; }
-    internal string Arguments { get; }
+    /// <summary>Stable identity of the adapter, release, official file, size and checksum shown for confirmation.</summary>
+    public string Identity { get; }
 }

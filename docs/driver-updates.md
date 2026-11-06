@@ -14,18 +14,31 @@ never an up-to-date result.
 
 The DSA feed supplies a SHA1 hash rather than the SHA512 shown on Intel's HTML Download Center pages.
 The library verifies the checksum its official machine-readable source actually publishes. Its hash
-reader supports SHA1, SHA256 and SHA512. Authenticode independently verifies the signature, trusted
-chain, timestamp and chain revocation for every vendor. The downloaded file is held against writes
-and deletion while its checksum/signature are verified, and verified again immediately before use.
-The extracted installer must also carry the expected vendor's valid signature. Packages and their
-extracted payloads stay under an administrator-protected Program Files directory.
+reader supports SHA1, SHA256 and SHA512, including omitted leading zeroes at each algorithm's width.
+It hashes bytes as they are written and uses WindowsDeviceControl's shared Authenticode primitive
+with chain revocation and the vendor's expected signer names. `DownloadAsync` returns a
+`GpuDriverDownload` retaining the same file handle against writers/deletion through `InstallAsync`;
+the package is not reopened, rehashed or reverified between those operations. The extracted installer
+is a different file and must independently carry the expected vendor's valid signature. The caller
+supplies the administrator-protected root for downloads and extraction.
 
-Extraction reads the self-extracting package as a 7-Zip or RAR archive; the download stub is never executed.
-Paths, links and expanded sizes are checked. `InstallAsync` calls the host's admission callback
+Extraction opens a non-owning seekable window over the held file at its embedded 7-Zip/RAR archive;
+it makes no second archive copy. Candidates in the PE stub are parsed as archives and must contain
+the documented root installer before extraction is admitted. An entry named `payload.7z` cannot
+collide with staging, because no such staging file exists. The download stub is never executed.
+Paths, links and declared/actual expanded sizes are checked. `InstallAsync` calls the host's admission callback
 after preparation and immediately before process creation. The host owns explicit confirmation,
 AC/battery/game/OEM checks, recording the previous version and releasing/recreating driver controls.
 Cancellation stops preparation; a started installer is awaited without cancellation or automatic
-retry. Its temporary extraction directory is removed after it exits. The host removes the download.
+retry. Its temporary extraction directory is removed after it exits. The host disposes the held
+download before removing the temporary package. Package metadata is an immutable public record with
+a stable identity for confirmation; vendor-specific comparison, executable, arguments, signer names
+and result-code policy live in the vendor profile.
+
+Installed Windows dates use the registry's exact month-day-year format. NVIDIA's lookup date uses
+the English `ddd MMM dd, yyyy` format. If AMD publishes several architecture branches and an
+installed version lies between them with no driver date, `IsNewer` returns null: the host reports
+that comparison as unavailable, rather than a failure or an invented install offer.
 
 Intel's packaged `installation_readme.txt` documents exit 14 as success requiring a reboot, 18 as
 success requiring shutdown/power-on, 13 as a failed attempt requiring a reboot first, and 1/5–11/15/16
@@ -34,7 +47,7 @@ when its launcher exits successfully; that is never reported as a successful ins
 
 Consumers must honor handheld/OEM restrictions before selecting a generic package. AMD's Adrenalin
 release notes explicitly exclude handheld gaming devices. LibHandheld records this and the
-model-specific OEM source; WSGM declines those generic AMD updates with the reason shown in both UIs.
+model-specific OEM source; the host declines those generic AMD updates with the supplied reason.
 
 Sources: [Intel command line](https://www.intel.com/content/www/us/en/support/articles/000006773/graphics.html),
 [Intel packaged readme](https://www.intel.com/content/www/us/en/support/articles/000098051/graphics.html),

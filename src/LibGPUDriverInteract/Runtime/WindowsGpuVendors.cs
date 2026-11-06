@@ -16,12 +16,22 @@ internal static partial class WindowsGpuVendors
 
     internal static IReadOnlyList<GpuVendor> Collect()
     {
-        return Collect(
+        return Parse(string.Join('\0', CollectInstances()));
+    }
+
+    internal static IReadOnlyList<string> CollectInstances()
+    {
+        return CollectInstances(
             (out uint length) => CM_Get_Device_ID_List_SizeW(out length, DisplayClass, PresentDisplayFlags),
             (buffer, length) => CM_Get_Device_ID_ListW(DisplayClass, buffer, length, PresentDisplayFlags));
     }
 
     internal static IReadOnlyList<GpuVendor> Collect(SizeLookup size, ListRead read)
+    {
+        return Parse(string.Join('\0', CollectInstances(size, read)));
+    }
+
+    internal static IReadOnlyList<string> CollectInstances(SizeLookup size, ListRead read)
     {
         uint result = BufferSmall;
         for (var attempt = 0; attempt < 3; attempt++)
@@ -41,7 +51,7 @@ internal static partial class WindowsGpuVendors
             result = read(buffer, length);
             if (result == 0)
             {
-                return Parse(new string(buffer));
+                return new string(buffer).Split('\0', StringSplitOptions.RemoveEmptyEntries);
             }
 
             // Hotplug may grow the list between the size and read calls. Only enumeration is repeated.

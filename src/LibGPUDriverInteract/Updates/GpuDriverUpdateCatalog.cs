@@ -8,7 +8,7 @@ using System.Xml.Linq;
 namespace LibGPUDriverInteract;
 
 /// <summary>Adapter-specific updates from Intel DSA and the official AMD and NVIDIA driver selectors.</summary>
-public sealed class GpuDriverUpdateCatalog : IDisposable
+public sealed partial class GpuDriverUpdateCatalog : IDisposable
 {
     private readonly HttpClient _http = new(new HttpClientHandler { AllowAutoRedirect = false })
     {
@@ -18,16 +18,12 @@ public sealed class GpuDriverUpdateCatalog : IDisposable
     /// <summary>Creates an HTTP owner; no vendor application or device driver is started.</summary>
     public GpuDriverUpdateCatalog()
     {
-        _http.DefaultRequestHeaders.UserAgent.ParseAdd("Mozilla/5.0 WSGM-DriverUpdates/1.0");
-        _http.DefaultRequestHeaders.Referrer = new Uri("https://www.amd.com/");
+        _http.DefaultRequestHeaders.UserAgent.ParseAdd("LibGPUDriverInteract/1.0");
     }
 
     /// <summary>Finds the latest compatible package; throws a clear refusal when the catalog cannot identify it.</summary>
     public async Task<GpuDriverPackage> CheckAsync(GpuInstalledDriver adapter, CancellationToken token = default)
     {
-        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(token);
-        deadline.CancelAfter(TimeSpan.FromMinutes(2));
-        token = deadline.Token;
         return adapter.Vendor switch
         {
             GpuVendor.Intel => await IntelAsync(adapter, token).ConfigureAwait(false),
@@ -38,57 +34,13 @@ public sealed class GpuDriverUpdateCatalog : IDisposable
     }
 
     /// <summary>Whether the selected package is newer than the adapter's installed driver.</summary>
-    public static bool IsNewer(GpuDriverPackage package)
-    {
-        var installed = package.Adapter.Version;
-        if (package.Adapter.Vendor == GpuVendor.Nvidia && System.Version.TryParse(installed, out var windows))
-        {
-            var digits = (windows.Build % 10 * 10000 + windows.Revision).ToString(CultureInfo.InvariantCulture);
-            installed = digits.Insert(digits.Length - 2, ".");
-        }
-
-        if (package.Adapter.Vendor == GpuVendor.Amd)
-        {
-            // AMD publishes several Windows versions in one release, for different architectures.
-            var versions = Regex.Matches(package.ReleaseNotes, @"Windows Driver Store Version\s+(\d+\.\d+\.\d+\.\d+)")
-                .Select(match => System.Version.Parse(match.Groups[1].Value)).Order().ToArray();
-            if (!System.Version.TryParse(installed, out var currentAmd) || versions.Length == 0)
-            {
-                throw new InvalidDataException("AMD's driver-store versions could not be compared with the installed driver.");
-            }
-
-            if (versions.Contains(currentAmd) || currentAmd > versions[^1])
-            {
-                return false;
-            }
-
-            if (currentAmd < versions[0])
-            {
-                return true;
-            }
-
-            return package.Adapter.Date is { } installedDate
-                ? installedDate.Date < package.Date.Date
-                : throw new InvalidDataException("AMD's multi-architecture release needs an installed driver date to compare.");
-        }
-
-        if (!System.Version.TryParse(NumericVersion(package.Version), out var available)
-            || !System.Version.TryParse(installed, out var current))
-        {
-            throw new InvalidDataException("The installed and available driver versions could not be compared.");
-        }
-
-        return available > current;
-    }
+    /// <returns>True for newer, false for current/newer installed, null for an ambiguous AMD branch without a driver date.</returns>
+    public static bool? IsNewer(GpuDriverPackage package) =>
+        GpuDriverUpdateProfile.For(package.Adapter.Vendor).IsNewer(package);
 
     private async Task<GpuDriverPackage> IntelAsync(GpuInstalledDriver adapter, CancellationToken token)
     {
-        using var response = await SendAsync(new Uri("https://dsadata.intel.com/data/en"), HttpMethod.Get, token)
-            .ConfigureAwait(false);
-        await using var input = await response.Content.ReadAsStreamAsync(token).ConfigureAwait(false);
-        using var data = new MemoryStream();
-        await CopyBoundedAsync(input, data, 8 * 1024 * 1024, token).ConfigureAwait(false);
-        data.Position = 0;
+        using var data = await BytesAsync("https://dsadata.intel.com/data/en", token).ConfigureAwait(false);
         using var archive = new ZipArchive(data);
         var entry = archive.GetEntry("software-configurations.json")
                     ?? throw new InvalidDataException("Intel DSA did not supply its software catalog.");
@@ -122,20 +74,13 @@ public sealed class GpuDriverUpdateCatalog : IDisposable
                 continue;
             }
 
-            var hash = file.GetProperty("Hash").GetString();
-            if (string.IsNullOrEmpty(hash) || hash.Length > 128 || !hash.All(Uri.IsHexDigit))
-            {
-                throw new InvalidDataException("Intel DSA's package checksum is missing or invalid.");
-            }
-
-            // DSA's SHA1 is serialized as a number: leading zeroes can be omitted in this feed.
-            hash = hash.Length <= 40 ? hash.PadLeft(40, '0') : hash;
+            var hash = NormalizeChecksum(file.GetProperty("Hash").GetString());
             var details = new Uri(item.GetProperty("Url").GetString()!);
             return new GpuDriverPackage(adapter, NumericVersion(item.GetProperty("Version").GetString()!),
                 item.GetProperty("DisplayReleaseDate").GetDateTime(),
                 CheckedUri(file.GetProperty("Url").GetString()!), details,
                 Plain(item.GetProperty("ExtendedDetails").GetString()!), file.GetProperty("Size").GetInt64(),
-                hash, "-s");
+                hash);
         }
 
         throw new NotSupportedException("Intel DSA lists no compatible Windows x64 graphics package for this adapter.");
@@ -145,7 +90,10 @@ public sealed class GpuDriverUpdateCatalog : IDisposable
     {
         const string lookup = "https://www.nvidia.com/Download/API/lookupValueSearch.aspx?TypeID=";
         var types = XDocument.Parse(await TextAsync(lookup + "1", token).ConfigureAwait(false));
-        foreach (var type in types.Descendants("LookupValue"))
+        var adapterName = NormalizeName(adapter.Name);
+        var family = NvidiaFamily().Match(adapter.Name);
+        foreach (var type in types.Descendants("LookupValue").Where(type => NvidiaBrandMatches(adapterName,
+                     NormalizeName(type.Element("Name")!.Value))))
         {
             var series = XDocument.Parse(await TextAsync(lookup + "2&ParentID=" + type.Element("Value")!.Value,
                 token).ConfigureAwait(false));
@@ -153,7 +101,6 @@ public sealed class GpuDriverUpdateCatalog : IDisposable
             {
                 var groupName = group.Element("Name")!.Value;
                 // Avoid downloading unrelated families. The exact product comparison below remains authoritative.
-                var family = Regex.Match(adapter.Name, @"(?:RTX|GTX|GT)\s+(\d{2})", RegexOptions.IgnoreCase);
                 if (family.Success && !groupName.Contains(family.Groups[1].Value, StringComparison.Ordinal)
                                    && !groupName.Contains("TITAN", StringComparison.OrdinalIgnoreCase))
                 {
@@ -163,7 +110,7 @@ public sealed class GpuDriverUpdateCatalog : IDisposable
                 var products = XDocument.Parse(await TextAsync(lookup + "3&ParentID=" + group.Element("Value")!.Value,
                     token).ConfigureAwait(false));
                 var product = products.Descendants("LookupValue").FirstOrDefault(value =>
-                    NormalizeName(value.Element("Name")!.Value) == NormalizeName(adapter.Name));
+                    NormalizeName(value.Element("Name")!.Value) == adapterName);
                 if (product is null)
                 {
                     continue;
@@ -172,7 +119,7 @@ public sealed class GpuDriverUpdateCatalog : IDisposable
                 var query = "https://gfwsl.geforce.com/services_toolkit/services/com/nvidia/services/AjaxDriverService.php"
                             + "?func=DriverManualLookup&pfid=" + product.Element("Value")!.Value
                             + "&psid=" + group.Element("Value")!.Value
-                            + "&osID=" + (Environment.OSVersion.Version.Build >= 22000 ? "135" : "57")
+                            + "&osID=" + NvidiaWindowsOsId
                             + "&languageCode=1033&isWHQL=1&dch=1&sort1=1&numberOfResults=1";
                 using var json = JsonDocument.Parse(await TextAsync(query, token).ConfigureAwait(false));
                 if (json.RootElement.GetProperty("Success").GetString() != "1")
@@ -183,10 +130,10 @@ public sealed class GpuDriverUpdateCatalog : IDisposable
                 var info = json.RootElement.GetProperty("IDS")[0].GetProperty("downloadInfo");
                 var url = CheckedUri(info.GetProperty("DownloadURL").GetString()!);
                 return new GpuDriverPackage(adapter, info.GetProperty("Version").GetString()!,
-                    DateTime.Parse(info.GetProperty("ReleaseDateTime").GetString()!, CultureInfo.InvariantCulture),
+                    ParseNvidiaDate(info.GetProperty("ReleaseDateTime").GetString()!),
                     url, CheckedUri(info.GetProperty("DetailsURL").GetString()!),
                     Plain(Uri.UnescapeDataString(info.GetProperty("ReleaseNotes").GetString()!)),
-                    await SizeAsync(url, token).ConfigureAwait(false), null, "-s -n Display.Driver");
+                    await SizeAsync(url, token).ConfigureAwait(false), null);
             }
         }
 
@@ -195,7 +142,9 @@ public sealed class GpuDriverUpdateCatalog : IDisposable
 
     private async Task<GpuDriverPackage> AmdAsync(GpuInstalledDriver adapter, CancellationToken token)
     {
-        var selector = await TextAsync("https://www.amd.com/en/support/download/drivers.html", token)
+        var referrer = new Uri("https://www.amd.com/");
+        var adapterName = NormalizeName(adapter.Name);
+        var selector = await TextAsync("https://www.amd.com/en/support/download/drivers.html", token, referrer)
             .ConfigureAwait(false);
         var match = Regex.Match(selector, "data-component=\"coveo-browse-documentation\"\\s+data-json=\"([^\"]+)\"");
         if (!match.Success)
@@ -205,7 +154,7 @@ public sealed class GpuDriverUpdateCatalog : IDisposable
 
         using var catalog = JsonDocument.Parse(WebUtility.HtmlDecode(match.Groups[1].Value));
         var candidates = Nodes(catalog.RootElement).Where(node => node.TryGetProperty("title", out var title)
-            && NormalizeName(title.GetString()!) == NormalizeName(adapter.Name)
+            && NormalizeName(title.GetString()!) == adapterName
             && node.TryGetProperty("url", out _)).ToArray();
         var urls = candidates.Select(node => node.GetProperty("url").GetString()!).Distinct().ToArray();
         if (urls.Length != 1)
@@ -214,7 +163,7 @@ public sealed class GpuDriverUpdateCatalog : IDisposable
         }
 
         var details = CheckedUri(urls[0]);
-        var page = await TextAsync(details.AbsoluteUri, token).ConfigureAwait(false);
+        var page = await TextAsync(details.AbsoluteUri, token, referrer).ConfigureAwait(false);
         var packages = Regex.Matches(page, @"<article\b[^>]*class=""[^""]*driver-download-details[^""]*""[\s\S]*?</article>");
         foreach (Match article in packages)
         {
@@ -228,11 +177,11 @@ public sealed class GpuDriverUpdateCatalog : IDisposable
                 continue;
             }
 
-            var notes = await TextAsync("https://www.amd.com" + notesLink.Value, token).ConfigureAwait(false);
+            var notes = await TextAsync("https://www.amd.com" + notesLink.Value, token, details).ConfigureAwait(false);
             var url = CheckedUri(WebUtility.HtmlDecode(download.Value));
             return new GpuDriverPackage(adapter, version.Groups[1].Value,
-                DateTime.Parse(date.Value, CultureInfo.InvariantCulture), url, details, Plain(notes),
-                await SizeAsync(url, token).ConfigureAwait(false), null, "-INSTALL");
+                DateTime.ParseExact(date.Value, "yyyy-MM-dd", CultureInfo.InvariantCulture), url, details, Plain(notes),
+                await SizeAsync(url, token, details).ConfigureAwait(false), null);
         }
 
         throw new NotSupportedException("AMD lists no supported Windows installer for this adapter.");
@@ -263,29 +212,45 @@ public sealed class GpuDriverUpdateCatalog : IDisposable
         }
     }
 
-    private async Task<string> TextAsync(string url, CancellationToken token)
+    private async Task<MemoryStream> BytesAsync(string url, CancellationToken token, Uri? referrer = null)
     {
-        using var response = await SendAsync(CheckedUri(url), HttpMethod.Get, token).ConfigureAwait(false);
+        using var response = await SendAsync(CheckedUri(url), HttpMethod.Get, token, referrer).ConfigureAwait(false);
         await using var input = await response.Content.ReadAsStreamAsync(token).ConfigureAwait(false);
-        using var output = new MemoryStream();
-        await CopyBoundedAsync(input, output, 8 * 1024 * 1024, token).ConfigureAwait(false);
-        return System.Text.Encoding.UTF8.GetString(output.ToArray());
+        var output = new MemoryStream();
+        try
+        {
+            await CopyBoundedAsync(input, output, 8 * 1024 * 1024, token).ConfigureAwait(false);
+            output.Position = 0;
+            return output;
+        }
+        catch
+        {
+            output.Dispose();
+            throw;
+        }
     }
 
-    private async Task<long> SizeAsync(Uri url, CancellationToken token)
+    private async Task<string> TextAsync(string url, CancellationToken token, Uri? referrer = null)
     {
-        using var response = await SendAsync(url, HttpMethod.Head, token).ConfigureAwait(false);
+        using var output = await BytesAsync(url, token, referrer).ConfigureAwait(false);
+        return System.Text.Encoding.UTF8.GetString(output.GetBuffer(), 0, checked((int)output.Length));
+    }
+
+    private async Task<long> SizeAsync(Uri url, CancellationToken token, Uri? referrer = null)
+    {
+        using var response = await SendAsync(url, HttpMethod.Head, token, referrer).ConfigureAwait(false);
         return response.Content.Headers.ContentLength is > 0 and < 4L * 1024 * 1024 * 1024
             ? response.Content.Headers.ContentLength.Value
             : throw new InvalidDataException("The official server did not supply a safe package size.");
     }
 
-    internal async Task<HttpResponseMessage> SendAsync(Uri url, HttpMethod method, CancellationToken token)
+    internal async Task<HttpResponseMessage> SendAsync(Uri url, HttpMethod method, CancellationToken token, Uri? referrer = null)
     {
         for (var redirects = 0; redirects < 6; redirects++)
         {
             CheckedUri(url.AbsoluteUri);
             using var request = new HttpRequestMessage(method, url);
+            request.Headers.Referrer = referrer;
             var response = await _http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, token)
                 .ConfigureAwait(false);
             if ((int)response.StatusCode is >= 300 and < 400 && response.Headers.Location is { } next)
@@ -323,10 +288,13 @@ public sealed class GpuDriverUpdateCatalog : IDisposable
         return url;
     }
 
-    internal static async Task CopyBoundedAsync(Stream input, Stream output, long limit, CancellationToken token)
+    internal static async Task CopyBoundedAsync(Stream input, Stream output, long limit, CancellationToken token,
+        IProgress<int>? progress = null, System.Security.Cryptography.IncrementalHash? hash = null)
     {
         var buffer = new byte[81920];
         long total = 0;
+        long nextReport = 0;
+        var reported = -1;
         int count;
         while ((count = await input.ReadAsync(buffer, token).ConfigureAwait(false)) > 0)
         {
@@ -336,15 +304,73 @@ public sealed class GpuDriverUpdateCatalog : IDisposable
                 throw new InvalidDataException("The vendor response exceeded its expected size.");
             }
 
+            hash?.AppendData(buffer, 0, count);
             await output.WriteAsync(buffer.AsMemory(0, count), token).ConfigureAwait(false);
+            var percent = (int)(100 * total / limit);
+            var now = Environment.TickCount64;
+            if (progress is not null && percent != reported && (now >= nextReport || total == limit))
+            {
+                reported = percent;
+                nextReport = now + 250;
+                progress.Report(percent);
+            }
         }
     }
 
-    internal static string Plain(string html) => WebUtility.HtmlDecode(Regex.Replace(
-        Regex.Replace(html, @"<(script|style)\b[\s\S]*?</\1>", "", RegexOptions.IgnoreCase), "<[^>]+>", " "));
-    private static string NumericVersion(string value) => Regex.Match(value, @"\d+\.\d+(?:\.\d+){0,2}").Value;
-    private static string NormalizeName(string value) => Regex.Replace(value.ToLowerInvariant(),
-        @"\b(nvidia|amd)\b|\(tm\)|\(r\)|[^a-z0-9]", "");
+    internal static string NormalizeChecksum(string? hash)
+    {
+        if (string.IsNullOrEmpty(hash) || hash.Length > 128 || !hash.All(Uri.IsHexDigit))
+        {
+            throw new InvalidDataException("Intel DSA's package checksum is missing or invalid.");
+        }
+
+        return hash.PadLeft(hash.Length <= 40 ? 40 : hash.Length <= 64 ? 64 : 128, '0');
+    }
+
+    internal static DateTime ParseNvidiaDate(string value) => DateTime.ParseExact(value,
+        ["ddd MMM dd, yyyy", "ddd MMM d, yyyy"], CultureInfo.InvariantCulture, DateTimeStyles.None);
+
+    private static string NvidiaWindowsOsId => Environment.OSVersion.Version.Build >= 22000 ? "135" : "57";
+
+    private static bool NvidiaBrandMatches(string adapterName, string productType)
+    {
+        if (adapterName.Contains("geforce", StringComparison.Ordinal))
+        {
+            return productType.Contains("geforce", StringComparison.Ordinal);
+        }
+
+        if (adapterName.Contains("titan", StringComparison.Ordinal))
+        {
+            return productType.Contains("titan", StringComparison.Ordinal);
+        }
+
+        if (adapterName.Contains("quadro", StringComparison.Ordinal) || adapterName.StartsWith("rtx", StringComparison.Ordinal))
+        {
+            return productType.Contains("quadro", StringComparison.Ordinal);
+        }
+
+        if (adapterName.Contains("tesla", StringComparison.Ordinal))
+        {
+            return productType.Contains("datacenter", StringComparison.Ordinal);
+        }
+
+        return true;
+    }
+
+    internal static string Plain(string html) => WebUtility.HtmlDecode(HtmlTags().Replace(ScriptStyle().Replace(html, ""), " "));
+    private static string NumericVersion(string value) => VersionNumber().Match(value).Value;
+    private static string NormalizeName(string value) => NameParts().Replace(value, "").ToLowerInvariant();
+
+    [GeneratedRegex(@"<(script|style)\b[\s\S]*?</\1>", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
+    private static partial Regex ScriptStyle();
+    [GeneratedRegex("<[^>]+>")]
+    private static partial Regex HtmlTags();
+    [GeneratedRegex(@"\d+\.\d+(?:\.\d+){0,2}")]
+    private static partial Regex VersionNumber();
+    [GeneratedRegex(@"\b(nvidia|amd)\b|\(tm\)|\(r\)|[^a-z0-9]", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
+    private static partial Regex NameParts();
+    [GeneratedRegex(@"(?:RTX|GTX|GT)\s+(\d{2})", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
+    private static partial Regex NvidiaFamily();
 
     /// <summary>Releases owned network resources.</summary>
     public void Dispose() => _http.Dispose();
