@@ -10,6 +10,7 @@ presentation and when settings should be changed.
 | [Controls](controls.md)                                     | Supported driver features, typed values and write outcomes   |
 | [Application profiles](profiles.md)                         | Complete native sync sets and switched settings              |
 | [Display identity](displays.md)                             | Physical monitors and changing Windows routes                |
+| [Driver updates](driver-updates.md) | Official catalogs, verified packages, silent installers and vendor outcomes |
 | [Troubleshooting](troubleshooting.md)                       | Loading, availability, uncertainty and cleanup               |
 | [API guide](../API.md) / [Complete reference](reference.md) | Public methods and contracts                                 |
 | [Contributing](../CONTRIBUTING.md)                          | Native sources, support checks and regression cases          |
