@@ -20,7 +20,7 @@ and deletion while its checksum/signature are verified, and verified again immed
 The extracted installer must also carry the expected vendor's valid signature. Packages and their
 extracted payloads stay under an administrator-protected Program Files directory.
 
-Extraction reads the self-extracting package as a 7-Zip archive; the download stub is never executed.
+Extraction reads the self-extracting package as a 7-Zip or RAR archive; the download stub is never executed.
 Paths, links and expanded sizes are checked. `InstallAsync` calls the host's admission callback
 after preparation and immediately before process creation. The host owns explicit confirmation,
 AC/battery/game/OEM checks, recording the previous version and releasing/recreating driver controls.

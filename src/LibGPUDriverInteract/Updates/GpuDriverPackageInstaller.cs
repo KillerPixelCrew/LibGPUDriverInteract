@@ -202,14 +202,8 @@ public sealed class GpuDriverPackageInstaller(GpuDriverUpdateCatalog catalog)
         input.Position = 0;
         var header = new byte[(int)Math.Min(input.Length, 4 * 1024 * 1024)];
         input.ReadExactly(header);
-        ReadOnlySpan<byte> signature = [0x37, 0x7a, 0xbc, 0xaf, 0x27, 0x1c];
-        var offset = header.AsSpan().IndexOf(signature);
-        if (offset < 0)
-        {
-            throw new InvalidDataException("The vendor installer contains no supported 7-Zip payload.");
-        }
-
-        var payload = Path.Combine(directory, "payload.7z");
+        var (offset, extension) = LocateArchive(header);
+        var payload = Path.Combine(directory, "payload" + extension);
         input.Position = offset;
         using (var output = new FileStream(payload, FileMode.CreateNew, FileAccess.Write, FileShare.None))
         {
@@ -247,5 +241,30 @@ public sealed class GpuDriverPackageInstaller(GpuDriverUpdateCatalog catalog)
                 destination.Write(buffer, 0, count);
             }
         }
+    }
+
+    internal static (int Offset, string Extension) LocateArchive(ReadOnlySpan<byte> header)
+    {
+        (byte[] Signature, string Extension)[] formats =
+        [
+            ([0x37, 0x7a, 0xbc, 0xaf, 0x27, 0x1c], ".7z"),
+            ([0x52, 0x61, 0x72, 0x21, 0x1a, 0x07, 0x01, 0x00], ".rar"),
+            ([0x52, 0x61, 0x72, 0x21, 0x1a, 0x07, 0x00], ".rar")
+        ];
+        var found = -1;
+        var extension = "";
+        foreach (var format in formats)
+        {
+            var offset = header.IndexOf(format.Signature);
+            if (offset >= 0 && (found < 0 || offset < found))
+            {
+                found = offset;
+                extension = format.Extension;
+            }
+        }
+
+        return found < 0
+            ? throw new InvalidDataException("The vendor installer contains no supported 7-Zip or RAR payload.")
+            : (found, extension);
     }
 }

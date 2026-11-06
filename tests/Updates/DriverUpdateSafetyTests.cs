@@ -79,6 +79,18 @@ public sealed class DriverUpdateSafetyTests
         Assert.Equal(restart, result.RestartRequired);
     }
 
+    [Theory]
+    [InlineData("377ABCAF271C", ".7z")]
+    [InlineData("526172211A070100", ".rar")]
+    [InlineData("526172211A0700", ".rar")]
+    public void DetectsVendorSelfExtractingArchiveFormats(string signature, string extension)
+    {
+        var header = new byte[64];
+        Convert.FromHexString(signature).CopyTo(header, 32);
+        Assert.Equal((32, extension), GpuDriverPackageInstaller.LocateArchive(header));
+        Assert.Throws<InvalidDataException>(() => GpuDriverPackageInstaller.LocateArchive(new byte[64]));
+    }
+
     private static GpuDriverPackage Package(GpuVendor vendor, string installed, string offered) => new(
         new GpuInstalledDriver("adapter", "hardware", vendor, "GPU", installed, new DateTime(2026, 1, 1)),
         offered, new DateTime(2026, 10, 30), new Uri("https://downloadmirror.intel.com/driver.exe"),
