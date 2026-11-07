@@ -1,20 +1,35 @@
 # Graphics driver updates
 
 `GpuInstalledDriver.ReadAll()` reads present PCI display adapters and their installed Windows driver
-version/date. `GpuDriverUpdateCatalog.CheckAsync(adapter)` selects a compatible package. It performs
+version/date. `GpuDriverUpdateCatalog.CheckAsync(adapter, includeNonWhql: false)` selects a compatible package. It performs
 bounded HTTPS requests and follows redirects only to the explicitly allowed official hosts. A missing
 or changed catalog, ambiguous product match, unsupported adapter or unknown version is a refusal,
 never an up-to-date result.
 
 | Vendor | Official source and matching | Integrity | Installer |
 | --- | --- | --- | --- |
-| Intel | DSA's `https://dsadata.intel.com/data/en` ZIP, `software-configurations.json`; Graphics component PCI detection values, Windows x64 file, no beta or OEM-only board/model package | Catalog byte size and published `Hash`, currently SHA1; Authenticode `Intel Corporation` | Extracted `Installer.exe -s`; no reboot, overwrite, clean-install, unsigned or process-termination switch |
+| Intel | DSA's `https://dsadata.intel.com/data/en` ZIP, `software-configurations.json`; Graphics component PCI detection values, Windows x64 file, no OEM-only board/model package; its matching Download Center product page supplies the current release, including non-WHQL when opted in | Official server byte size and Download Center SHA512; Authenticode `Intel Corporation` | Extracted `Installer.exe -s`; no reboot, overwrite, clean-install, unsigned or process-termination switch |
 | AMD | AMD's driver selector's embedded product JSON, exact normalized product name, that product's Adrenalin download article and release notes | Official download server's exact byte size and Authenticode `Advanced Micro Devices` (including its older legal-name certificates); this source publishes no package checksum | Extracted `Setup.exe -INSTALL -LOG <private-result-file>`; parse both overall and package result codes, including partial failure and reboot |
-| NVIDIA | Official `lookupValueSearch.aspx` product type/series/product lists, exact normalized adapter name; `gfwsl.geforce.com` DriverManualLookup with product/series, Windows OS, WHQL and DCH | Official download server's exact byte size and Authenticode `NVIDIA Corporation`; this source publishes no package checksum | Extracted `setup.exe -s -n Display.Driver`; exit 0 succeeds, 1 succeeds with a restart, other codes fail |
+| NVIDIA | Official `lookupValueSearch.aspx` product type/series/product lists, exact normalized adapter name; `gfwsl.geforce.com` DriverManualLookup with product/series, Windows OS and DCH; WHQL-only by default, official all-release/beta lookup when opted in | Official download server's exact byte size and Authenticode `NVIDIA Corporation`; this source publishes no package checksum | Extracted `setup.exe -s -n Display.Driver`; exit 0 succeeds, 1 succeeds with a restart, other codes fail |
 
-The DSA feed supplies a SHA1 hash rather than the SHA512 shown on Intel's HTML Download Center pages.
-The library verifies the checksum its official machine-readable source actually publishes. Its hash
-reader supports SHA1, SHA256 and SHA512, including omitted leading zeroes at each algorithm's width.
+DSA is used for adapter/OS/branch applicability, not as the final release-version authority: its
+snapshot can lag Download Center. The selected product page's unpinned URL supplies `DownloadVersion`,
+`RecommendedDownloadUrl`, `LastUpdate`, release-notes certification and SHA512. A blocked US page is
+retried through Intel's official `www.intel.cn` regional mirror with the same downloadmirror payload.
+A newer version-selector entry is checked when non-WHQL is enabled; when the current release is
+non-WHQL and the option is off, the certified version-selector entry or DSA-pinned page is used.
+Unknown certification or a missing SHA512 is a refusal. The DSA PCI match remains mandatory, so an
+11th–14th Gen UHD adapter is never moved to the Arc/Core Ultra branch merely for a larger version.
+
+`GpuDriverPackage.IsWhql` and `Certification` carry the vendor's status through confirmation identity
+and UI. Intel's release-notes filename distinguishes `_WHQL` from `_Non-WHQL`; AMD's product articles
+label WHQL independently of Recommended/Optional (Optional may itself be WHQL). NVIDIA's official
+`DriverManualLookup` supports all releases with `isWHQL=0`; its `IsBeta`/`IsWHQL` fields and WHQL file
+name determine certification. Studio records are not substituted for Game Ready by enabling beta.
+When the current adapter catalog lists no newer non-WHQL release, the result says so. The switch does
+not enable unsigned packages, unofficial mirrors, automatic installs or relaxed integrity checks.
+
+The hash reader supports SHA1, SHA256 and SHA512, including omitted leading zeroes at each width.
 It hashes bytes as they are written and uses WindowsDeviceControl's shared Authenticode primitive
 with chain revocation and the vendor's expected signer names. `DownloadAsync` returns a
 `GpuDriverDownload` retaining the same file handle against writers/deletion through `InstallAsync`;

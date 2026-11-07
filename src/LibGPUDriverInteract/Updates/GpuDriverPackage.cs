@@ -9,7 +9,7 @@ public sealed record GpuDriverPackage
 {
     /// <summary>Creates immutable package metadata; installation independently verifies the file and expected vendor signer.</summary>
     public GpuDriverPackage(GpuInstalledDriver adapter, string version, DateTime date, Uri download,
-        Uri details, string notes, long size, string? checksum)
+        Uri details, string notes, long size, string? checksum, bool isWhql = true)
     {
         if (size is <= 0 or >= 4L * 1024 * 1024 * 1024)
         {
@@ -24,9 +24,17 @@ public sealed record GpuDriverPackage
         ReleaseNotes = notes;
         Size = size;
         Checksum = checksum;
+        IsWhql = isWhql;
         Identity = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(string.Join('\0',
-            adapter.InstanceId, version, download.AbsoluteUri, size.ToString(CultureInfo.InvariantCulture), checksum ?? ""))));
+            adapter.InstanceId, version, download.AbsoluteUri, size.ToString(CultureInfo.InvariantCulture), checksum ?? "", isWhql.ToString()))));
     }
+
+    /// <summary>Whether the vendor explicitly certifies this release through WHQL.</summary>
+    public bool IsWhql { get; }
+    /// <summary>Certification displayed with every offered release.</summary>
+    public string Certification => IsWhql ? "WHQL certified" : "Non-WHQL (beta / optional)";
+    /// <summary>Availability of an official non-WHQL channel for the selected adapter.</summary>
+    public string? ChannelDetail { get; init; }
 
     /// <summary>The installed adapter this package was selected for.</summary>
     public GpuInstalledDriver Adapter { get; }
