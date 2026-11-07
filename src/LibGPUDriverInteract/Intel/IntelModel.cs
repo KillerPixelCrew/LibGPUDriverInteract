@@ -39,18 +39,24 @@ internal sealed class IntelModel
     ];
 
     private readonly Dictionary<nint, ArcSyncDisplay> _arcSync;
+
+    /// <summary>What each adapter and display offered when it was found, by section id.</summary>
+    private readonly Dictionary<string, Found> _found;
+
     private readonly Dictionary<string, INativeProfileTarget> _targets;
 
     private IntelModel(
         IReadOnlyList<IntelControl> controls,
         IReadOnlyList<GpuSection> sections,
         Dictionary<string, INativeProfileTarget> targets,
-        Dictionary<nint, ArcSyncDisplay> arcSync)
+        Dictionary<nint, ArcSyncDisplay> arcSync,
+        Dictionary<string, Found> found)
     {
         Controls = controls;
         Sections = sections;
         _targets = targets;
         _arcSync = arcSync;
+        _found = found;
     }
 
     /// <summary>Every display with Arc Sync, the ones a refresh rate can be fixed on.</summary>
@@ -82,9 +88,16 @@ internal sealed class IntelModel
     /// <param name="adapterKeys">The display adapter class, enumerated once per session.</param>
     /// <param name="fixedRefresh">The session's fixed refresh-rate records.</param>
     /// <param name="log">Receives every decision.</param>
+    /// <param name="previous">The model this session built before, whose adapters and displays keep their controls.</param>
     /// <returns>The model; empty when the driver offers nothing.</returns>
     /// <remarks>
     ///     The adapters come first, then the built-in panel, then the other displays in order.
+    ///     <para>
+    ///         Which controls an adapter or display offers is decided when it is found. An adapter or display
+    ///         <paramref name="previous" /> already holds keeps the controls built then, so a rediscovery while
+    ///         the driver answers capability queries with nothing, as it does while a panel powers up, never
+    ///         retracts them. Only new displays are queried, and a display that is gone takes its controls along.
+    ///     </para>
     /// </remarks>
     public static IntelModel Build(
         IgclSession session,
@@ -92,11 +105,13 @@ internal sealed class IntelModel
         ColorStore colors,
         IReadOnlyList<AdapterClassEntry> adapterKeys,
         FixedRefreshStore fixedRefresh,
-        IDriverSink log)
+        IDriverSink log,
+        IntelModel? previous = null)
     {
         List<IntelControl> controls = [];
         Dictionary<nint, ArcSyncDisplay> arcSync = [];
         List<GpuSection> sections = [];
+        Dictionary<string, Found> found = new(StringComparer.Ordinal);
         Dictionary<string, INativeProfileTarget> targets = new(StringComparer.Ordinal);
         var several = session.Adapters.Count > 1;
         var memoryAdapter = MemoryAdapter(session.Adapters, memory);
@@ -106,11 +121,28 @@ internal sealed class IntelModel
             var sectionId = several ? $"graphics-{adapter.Index}" : "graphics";
             var title = several ? DriverDescriptors.Label(adapter.Name, "Graphics") : "Graphics";
             List<IntelControl> built = [];
-            BuildAdapter(session, adapter, instance, sectionId, adapterKeys, built, targets, log);
-            if (ReferenceEquals(adapter, memoryAdapter))
+            if (previous?._found.GetValueOrDefault(sectionId) is { } kept)
             {
-                built.Add(new SharedMemoryControl(memory, instance, new Placement(sectionId, SystemCategory, 900)));
+                built.AddRange(kept.Controls);
+                foreach (var control in kept.Controls)
+                {
+                    if (previous._targets.GetValueOrDefault(control.Key) is { } target)
+                    {
+                        targets[control.Key] = target;
+                    }
+                }
             }
+            else
+            {
+                BuildAdapter(session, adapter, instance, sectionId, adapterKeys, built, targets, log);
+                if (ReferenceEquals(adapter, memoryAdapter))
+                {
+                    built.Add(new SharedMemoryControl(memory, instance,
+                        new Placement(sectionId, SystemCategory, 900)));
+                }
+            }
+
+            found[sectionId] = new Found(built, null);
 
             Section(sectionId, title, "Intel graphics driver settings", GpuSectionKind.Adapter, AdapterCategories,
                 built, controls, sections);
@@ -138,17 +170,32 @@ internal sealed class IntelModel
 
             var sectionId = $"display-{ValueMapping.Fingerprint(identity.InstanceId)}";
             List<IntelControl> built = [];
-            if (BuildDisplay(session, output, identity, sectionId, ref semanticVrrTaken, colors, fixedRefresh, built,
-                    log) is { } display)
+            ArcSyncDisplay? display;
+            if (previous?._found.GetValueOrDefault(sectionId) is { } kept)
+            {
+                built.AddRange(kept.Controls);
+                display = kept.ArcSync;
+                // The first display with Arc Sync holds the variable refresh role, as when it was built.
+                semanticVrrTaken |= display is not null;
+            }
+            else
+            {
+                display = BuildDisplay(session, output, identity, sectionId, ref semanticVrrTaken, colors,
+                    fixedRefresh, built, log);
+            }
+
+            if (display is not null)
             {
                 arcSync[output.Handle] = display;
             }
+
+            found[sectionId] = new Found(built, display);
 
             Section(sectionId, name, "Intel display settings", GpuSectionKind.Display, DisplayCategories, built,
                 controls, sections, identity.Target);
         }
 
-        return new IntelModel(controls, sections, targets, arcSync);
+        return new IntelModel(controls, sections, targets, arcSync, found);
     }
 
     /// <summary>The stable instance id of an adapter.</summary>
@@ -562,4 +609,7 @@ internal sealed class IntelModel
                 : $"The driver answered {IgclResult.Describe(result)} to per-application settings for {executable}.";
         }
     }
+
+    /// <summary>The controls an adapter or display offered when it was found, and its Arc Sync state.</summary>
+    private sealed record Found(IReadOnlyList<IntelControl> Controls, ArcSyncDisplay? ArcSync);
 }

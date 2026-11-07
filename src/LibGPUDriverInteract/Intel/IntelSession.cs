@@ -62,13 +62,13 @@ internal sealed partial class IntelSession : IDriverSession
         _session.BeginPass();
     }
 
-    /// <summary>Builds the controls, or keeps them when the connected outputs are the ones already built.</summary>
+    /// <summary>Builds the controls of new outputs, keeping those of the adapters and outputs already built.</summary>
     /// <remarks>
-    ///     Which controls a display offers is decided when it is found. A topology signal with the same
-    ///     outputs, such as the display powering off for sleep, keeps the session's output handles, and the
-    ///     driver answers capability queries then with nothing: an Arc B370 on 2026-11-07 reported no colour
-    ///     blocks and <c>CTL_RESULT_ERROR_KMD_CALL</c> for Arc Sync, and the rebuilt model dropped those rows
-    ///     until the next wake. So the existing controls stay; they read again once the driver answers.
+    ///     Which controls a display offers is decided when it is found. During a topology signal the driver can
+    ///     answer capability queries with nothing: an Arc B370 on 2026-11-07, its display powering off for sleep,
+    ///     reported no colour blocks and <c>CTL_RESULT_ERROR_KMD_CALL</c> for Arc Sync, and the rebuilt model
+    ///     dropped those rows until the next wake. So an unchanged set of outputs keeps the model as it is, and
+    ///     a changed one builds only the new outputs; the kept controls read again once the driver answers.
     /// </remarks>
     public DriverModel Discover()
     {
@@ -78,7 +78,7 @@ internal sealed partial class IntelSession : IDriverSession
             return kept;
         }
 
-        _model = IntelModel.Build(_session, _memory, _colors, _adapterKeys, _fixedRefresh, _log);
+        _model = IntelModel.Build(_session, _memory, _colors, _adapterKeys, _fixedRefresh, _log, _model);
         // A rate a previous process fixed and never put back is restored as each display is first found.
         foreach (var display in _model.ArcSyncDisplays)
         {

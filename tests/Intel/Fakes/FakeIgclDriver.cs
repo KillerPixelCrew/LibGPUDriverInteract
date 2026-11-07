@@ -60,6 +60,9 @@ internal sealed unsafe class FakeIgclDriver
     internal ConcurrentQueue<CtlArcSyncProfileParams> ArcWrites { get; } = new();
     internal int ArcReadResult { get; set; }
     internal int ArcMonitorResult { get; set; }
+
+    /// <summary>Outputs, by enumeration index, whose colour and Arc Sync queries answer nothing, as while powering up.</summary>
+    internal HashSet<int> SilentOutputs { get; } = [];
     internal int ArcWriteResult { get; set; }
     internal uint ColorBlockCount { get; set; } = 1;
     internal int ColorWrites { get; private set; }
@@ -219,6 +222,11 @@ internal sealed unsafe class FakeIgclDriver
 
     private int ArcMonitor(nint handle, CtlArcSyncMonitorParams* monitor)
     {
+        if (SilentOutputs.Contains((int)handle - 10))
+        {
+            return IgclResult.KmdCall;
+        }
+
         if (ArcMonitorResult != IgclResult.Success)
         {
             return ArcMonitorResult;
@@ -272,7 +280,7 @@ internal sealed unsafe class FakeIgclDriver
             return IgclResult.Success;
         }
 
-        var count = ColorBlockCount + (ColorMatrix ? 1u : 0u);
+        var count = SilentOutputs.Contains((int)handle - 10) ? 0 : ColorBlockCount + (ColorMatrix ? 1u : 0u);
         pipe->NumBlocks = count;
         if (pipe->BlockConfigs != 0)
         {

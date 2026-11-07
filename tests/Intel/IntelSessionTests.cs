@@ -62,6 +62,45 @@ public sealed class IntelSessionTests
     }
 
     [Fact]
+    public void ConnectingADisplayWhileThePanelPowersUpKeepsThePanelsControls()
+    {
+        using var directory = new TemporaryDirectory();
+        var native = new FakeIgclDriver { DisplayFlags = [3] };
+        using var session = native.CreateSession(directory.Root, new RecordingDriverSink());
+        var started = session.Discover();
+        var panel = started.Controls.Select(control => control.Key).ToArray();
+        Assert.Contains(panel, key => key.StartsWith("display.color-brightness|", StringComparison.Ordinal));
+        Assert.Contains(panel, key => key.StartsWith("display.variable-refresh|", StringComparison.Ordinal));
+
+        // An external display arrives while the panel powers up and the driver answers nothing for the panel.
+        native.DisplayFlags = [3, 3];
+        native.SilentOutputs.Add(0);
+        var connected = session.Discover();
+        var keys = connected.Controls.Select(control => control.Key).ToArray();
+        Assert.Equal(panel, keys.Take(panel.Length));
+        var external = keys.Skip(panel.Length).ToArray();
+        Assert.Contains(external, key => key.StartsWith("display.color-brightness|", StringComparison.Ordinal));
+        Assert.DoesNotContain(external, panel.Contains);
+        Assert.Equal(started.Sections.Count + 1, connected.Sections.Count);
+        Assert.Equal(started.Sections, connected.Sections.Take(started.Sections.Count));
+        // The kept variable refresh control still holds the role.
+        Assert.Single(connected.Controls, control => control.Descriptor.Role == GpuRole.VariableRefreshRate);
+
+        // Once the driver answers, the kept panel controls read again.
+        native.SilentOutputs.Clear();
+        session.BeginPass();
+        var brightness = panel.Single(key => key.StartsWith("display.color-brightness|", StringComparison.Ordinal));
+        Assert.Equal(GpuValue.Integer(0), connected.Controls.Single(control => control.Key == brightness).Read());
+
+        // Disconnecting the external display removes only its controls.
+        native.DisplayFlags = [3];
+        var disconnected = session.Discover();
+        Assert.Equal(panel, disconnected.Controls.Select(control => control.Key));
+        Assert.Equal(started.Sections, disconnected.Sections);
+        Assert.Equal(1, native.Opens);
+    }
+
+    [Fact]
     public void SuppliedSessionOwnsItsNativeApiButBorrowsTheRegistryAndMemoryTransport()
     {
         using var directory = new TemporaryDirectory();
