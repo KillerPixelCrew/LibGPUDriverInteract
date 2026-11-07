@@ -6,10 +6,14 @@ namespace LibGPUDriverInteract;
 
 /// <summary>Downloads, verifies and runs vendor installers without retrying a driver write.</summary>
 /// <param name="catalog">The official source client.</param>
-/// <param name="protectedRoot">Caller-owned administrator-protected temporary storage.</param>
-public sealed class GpuDriverPackageInstaller(GpuDriverUpdateCatalog catalog, string protectedRoot)
+/// <param name="root">
+///     Caller-owned working storage for one package and its per-run extraction folder. The vendor installers
+///     start from a folder inside it: Intel's refuses one beneath Windows, System or Program Files, so use a
+///     folder such as ProgramData.
+/// </param>
+public sealed class GpuDriverPackageInstaller(GpuDriverUpdateCatalog catalog, string root)
 {
-    private readonly string _root = Path.GetFullPath(protectedRoot);
+    private readonly string _root = Path.GetFullPath(root);
 
     /// <summary>Hashes while downloading, verifies Authenticode once, and retains the file handle until installation ends.</summary>
     public async Task<GpuDriverDownload> DownloadAsync(GpuDriverPackage package, IProgress<int>? progress = null,
@@ -69,7 +73,7 @@ public sealed class GpuDriverPackageInstaller(GpuDriverUpdateCatalog catalog, st
     {
         if (!Path.GetDirectoryName(Path.GetFullPath(download.Path))!.Equals(_root, StringComparison.OrdinalIgnoreCase))
         {
-            throw new InvalidDataException("The package is outside the protected download directory.");
+            throw new InvalidDataException("The package is outside the download directory.");
         }
 
         var package = download.Package;
