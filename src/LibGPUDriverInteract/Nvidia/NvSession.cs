@@ -129,7 +129,7 @@ internal sealed class NvSession : IDriverSession
             if (controls.Count > before)
             {
                 sections.Add(DriverDescriptors.Section(section,
-                    "NVIDIA " + (output.Target?.FriendlyName ?? "display " + output.Id.ToString("X8")), true) with
+                    "NVIDIA " + (output.Target?.FriendlyName ?? "display"), true) with
                 {
                     DisplayTarget = output.Route
                 });
