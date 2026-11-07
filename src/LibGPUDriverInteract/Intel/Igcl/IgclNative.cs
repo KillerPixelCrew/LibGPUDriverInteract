@@ -16,9 +16,11 @@ internal static class IgclResult
     public const int UnsupportedSize = 0x40000010;
     public const int DataNotFound = 0x40000014;
     public const int NotImplemented = 0x40000015;
+    public const int KmdCall = 0x40000017;
     public const int InvalidOperationType = 0x4000001a;
     public const int PlatformNotSupported = 0x40000020;
     public const int InvalidEnumeration = 0x40000022;
+    public const int InvalidPixTxBlockType = 0x4800000b;
     public const int SetFbcNotSupported = 0x48000020;
 
     /// <summary>
@@ -58,10 +60,38 @@ internal static class IgclResult
 
     /// <summary>Renders a code for a trace line.</summary>
     /// <param name="result">Any IGCL result.</param>
-    /// <returns>The code in hexadecimal.</returns>
+    /// <returns>The code in hexadecimal, with its <c>igcl_api.h</c> name when it is one this library handles.</returns>
     public static string Describe(int result)
     {
-        return $"0x{result:x8}";
+        return Name(result) is { } name ? $"0x{result:x8} ({name})" : $"0x{result:x8}";
+    }
+
+    /// <summary>The <c>ctl_result_t</c> name of a code this library handles.</summary>
+    /// <param name="result">Any IGCL result.</param>
+    /// <returns>The name, or null for a code without one here.</returns>
+    public static string? Name(int result)
+    {
+        return result switch
+        {
+            Success => "CTL_RESULT_SUCCESS",
+            DeviceLost => "CTL_RESULT_ERROR_DEVICE_LOST",
+            InsufficientPermissions => "CTL_RESULT_ERROR_INSUFFICIENT_PERMISSIONS",
+            Uninitialized => "CTL_RESULT_ERROR_UNINITIALIZED",
+            UnsupportedVersion => "CTL_RESULT_ERROR_UNSUPPORTED_VERSION",
+            UnsupportedFeature => "CTL_RESULT_ERROR_UNSUPPORTED_FEATURE",
+            InvalidArgument => "CTL_RESULT_ERROR_INVALID_ARGUMENT",
+            InvalidSize => "CTL_RESULT_ERROR_INVALID_SIZE",
+            UnsupportedSize => "CTL_RESULT_ERROR_UNSUPPORTED_SIZE",
+            DataNotFound => "CTL_RESULT_ERROR_DATA_NOT_FOUND",
+            NotImplemented => "CTL_RESULT_ERROR_NOT_IMPLEMENTED",
+            KmdCall => "CTL_RESULT_ERROR_KMD_CALL",
+            InvalidOperationType => "CTL_RESULT_ERROR_INVALID_OPERATION_TYPE",
+            PlatformNotSupported => "CTL_RESULT_ERROR_PLATFORM_NOT_SUPPORTED",
+            InvalidEnumeration => "CTL_RESULT_ERROR_INVALID_ENUMERATION",
+            InvalidPixTxBlockType => "CTL_RESULT_ERROR_INVALID_PIXTX_BLOCK_TYPE",
+            SetFbcNotSupported => "CTL_RESULT_ERROR_SET_FBC_FEATURE_NOT_SUPPORTED",
+            _ => null
+        };
     }
 }
 

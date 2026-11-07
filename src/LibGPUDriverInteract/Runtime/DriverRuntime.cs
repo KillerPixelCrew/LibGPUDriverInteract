@@ -160,7 +160,7 @@ internal sealed partial class DriverRuntime(string id, Func<string, IDriverSink,
                                                     and not DriverFailure { Lost: true })
                 {
                     error = failure.Message;
-                    _sink!.LogChange(GpuLogLevel.Warn, id, "read/" + control.Key, error);
+                    _sink!.LogChange(GpuLogLevel.Warn, id, "read/" + control.Key, $"{control.Key}: {error}");
                 }
 
                 var quality = value is null ? GpuStateQuality.Unknown : GpuStateQuality.Observed;
@@ -289,7 +289,7 @@ internal sealed partial class DriverRuntime(string id, Func<string, IDriverSink,
             }
             else
             {
-                _sink!.LogChange(GpuLogLevel.Warn, id, "readback/" + control.Key, error);
+                _sink!.LogChange(GpuLogLevel.Warn, id, "readback/" + control.Key, $"{control.Key} readback: {error}");
             }
 
             return null;
@@ -460,6 +460,10 @@ internal sealed partial class DriverRuntime(string id, Func<string, IDriverSink,
                                                                    .SequenceEqual(pair.Second.Choices));
     }
 
+    /// <summary>The reason a value the driver did not report is published with, for every vendor.</summary>
+    internal static GpuReason UnreadReason { get; } =
+        new(GpuReasonCode.TransportFaulted, "The current value is unknown: the driver did not report it.");
+
     private void PublishValue(DriverControl control, GpuValue? value, string? error,
         GpuStateQuality quality, CancellationToken token)
     {
@@ -470,7 +474,8 @@ internal sealed partial class DriverRuntime(string id, Func<string, IDriverSink,
             ObservedValue = value,
             Available = value is not null || control.Descriptor.SupportsWrite ||
                         control.Descriptor.Role == GpuRole.Action,
-            Reason = error is null ? null : new GpuReason(GpuReasonCode.TransportFaulted, error),
+            // The driver's own failure text (result codes, call names) is for the log, which already has it.
+            Reason = error is null ? null : UnreadReason,
             Quality = quality
         };
         if (_published.GetValueOrDefault(control.Key) == state)

@@ -149,9 +149,19 @@ internal sealed class ColorField
 ///     and its 3D LUT is unsupported, so the SDR algorithms here would be wrong. Every write carries
 ///     <c>CTL_PIXTX_PIPE_SET_CONFIG_FLAG_PERSIST_ACROSS_POWER_EVENTS</c> so the result survives sleep.
 ///     <para>
+///         <c>CTL_PIXTX_CONFIG_QUERY_TYPE_CURRENT</c> returns only "the configuration set through last set
+///         call", and only for a LUT. Measured on 2026-11-07 on an Intel laptop panel with five blocks (3D LUT,
+///         degamma LUT, CSC with offsets, gamma LUT, CSC) and seen in an Arc B370 log: before any set the gamma
+///         LUT answers <c>CTL_RESULT_ERROR_KMD_CALL</c>; after a set it returns the samples written; both CSC
+///         blocks answer <c>CTL_RESULT_ERROR_INVALID_PIXTX_BLOCK_TYPE</c> even right after a set that carried
+///         them. The LUT also answers that code while another writer's configuration is current, as during
+///         display power-off. So the curve is read, and the matrix is known only through it: every write sets
+///         the curve and the matrix in one call, as Intel's <c>ApplyLinearCSC</c> sample sets several blocks,
+///         and a curve that matches the record therefore carries the record's matrix.
+///     </para>
+///     <para>
 ///         The pipe is read once per pass and serves all five rows. The sample buffer, the neutral curve
-///         and the curve and matrix of the recorded settings are built once and reused, so a pass
-///         allocates nothing.
+///         and the curve of the recorded settings are built once and reused, so a pass allocates nothing.
 ///     </para>
 /// </remarks>
 internal sealed unsafe class ColorPipeline
@@ -168,23 +178,24 @@ internal sealed unsafe class ColorPipeline
     private const uint FeatureHdr = 1 << 5;
     private const int MatrixSize = 9;
 
-    private readonly double[] _coefficients = new double[MatrixSize];
-
     private readonly string _curveKey;
     private readonly string _display;
     private readonly IDriverSink _log;
     private readonly CtlPixTxBlockConfig _lutBlock;
     private readonly CtlPixTxBlockConfig? _matrixBlock;
-    private readonly string _matrixKey;
+
+    /// <summary>Whether the matrix precedes the curve in the pipe, the order a set call lists them in.</summary>
+    private readonly bool _matrixFirst;
+
     private readonly double[] _neutralCurve;
     private readonly IgclOutput _output;
     private readonly double[] _recordedCurve;
-    private readonly double[] _recordedMatrix = new double[MatrixSize];
     private readonly double[] _samples;
     private readonly IgclSession _session;
     private readonly ColorStore _store;
     private ColorSettings? _curve;
     private ColorSettings? _matrix;
+    private string _observation = string.Empty;
     private long _observedPass;
     private ColorSettings? _recorded;
     private int _result;
@@ -195,6 +206,7 @@ internal sealed unsafe class ColorPipeline
         string display,
         CtlPixTxBlockConfig lutBlock,
         CtlPixTxBlockConfig? matrixBlock,
+        bool matrixFirst,
         ColorStore store,
         IDriverSink log)
     {
@@ -203,8 +215,8 @@ internal sealed unsafe class ColorPipeline
         _display = display;
         _store = store;
         _log = log;
+        _matrixFirst = matrixFirst;
         _curveKey = $"{display}.curve";
-        _matrixKey = $"{display}.matrix";
         var perChannel = (int)lutBlock.Config.OneDLut.SamplesPerChannel;
 
         // Pinned for the pipeline's lifetime, so every query and write hands the driver the same buffer.
@@ -283,16 +295,21 @@ internal sealed unsafe class ColorPipeline
 
         CtlPixTxBlockConfig? curve = null;
         CtlPixTxBlockConfig? matrix = null;
-        foreach (var block in blocks)
+        var curveIndex = -1;
+        var matrixIndex = -1;
+        for (var index = 0; index < blocks.Length; index++)
         {
+            var block = blocks[index];
             // Intel's sample takes the last 1D LUT for desktop gamma: in HDR only that one is reported.
             if (block.BlockType == BlockType1dLut)
             {
                 curve = block;
+                curveIndex = index;
             }
             else if (block.BlockType == BlockType3x3Matrix && matrix is null)
             {
                 matrix = block;
+                matrixIndex = index;
             }
         }
 
@@ -305,7 +322,8 @@ internal sealed unsafe class ColorPipeline
             return null;
         }
 
-        return new ColorPipeline(session, output, display, lut, matrix, store, log);
+        return new ColorPipeline(session, output, display, lut, matrix, matrix is not null && matrixIndex < curveIndex,
+            store, log);
     }
 
     /// <summary>Reads one field.</summary>
@@ -319,30 +337,30 @@ internal sealed unsafe class ColorPipeline
             return ControlRead.Of(GpuValue.Integer(field.Get(known)));
         }
 
-        return _result == IgclResult.Success ? ControlRead.Of(null) : ControlRead.Driver(_result);
+        return _result == IgclResult.Success ? ControlRead.Failed(_observation) : ControlRead.Driver(_result);
     }
 
-    /// <summary>Writes one field, carrying the others of its block.</summary>
+    /// <summary>Writes one field, carrying the other colour values.</summary>
     /// <param name="field">The field.</param>
     /// <param name="value">The value.</param>
     /// <param name="admission">Rechecked after preparatory reads and before the setter.</param>
     /// <returns>How the driver answered.</returns>
     /// <remarks>
-    ///     When the driver holds a curve or matrix the consumer did not write, its values are unknown and have
-    ///     been published as such, so the other fields of that block cannot be carried: the write starts
-    ///     them from neutral and says so in the log.
+    ///     The curve and the matrix go out together in one set call, so the curve read afterwards also
+    ///     vouches for the matrix. Values the driver holds but the consumer cannot name are unknown and
+    ///     have been published as such, so they cannot be carried: the write starts them from neutral and
+    ///     says so in the log.
     /// </remarks>
     public ControlWrite Write(ColorField field, int value, WriteAdmission admission)
     {
         Observe(true);
         var neutral = ColorSettings.Neutral;
-        if ((field.InMatrix ? _matrix : _curve) is null)
+        if (_curve is null || (HasMatrix && _matrix is null))
         {
             _log.Info(
                 "color",
-                $"{_display}: the driver holds a {(field.InMatrix ? "colour matrix" : "tone curve")} the consumer did not "
-                + $"write; writing {field.Label.ToLowerInvariant()} replaces it and starts "
-                + $"{(field.InMatrix ? "hue and saturation" : "brightness, contrast and gamma")} from neutral.");
+                $"{_display}: the driver holds colour the consumer did not write; writing "
+                + $"{field.Label.ToLowerInvariant()} replaces it and starts the unknown colour values from neutral.");
         }
 
         var curve = _curve ?? neutral;
@@ -350,7 +368,7 @@ internal sealed unsafe class ColorPipeline
         var settings = field.Set(
             new ColorSettings(curve.Brightness, curve.Contrast, curve.Gamma, matrix.Hue, matrix.Saturation),
             value);
-        var result = field.InMatrix ? WriteMatrix(settings, admission) : WriteCurve(settings, admission);
+        var result = Apply(settings, admission);
         _observedPass = 0;
         var write = ControlWrite.From(result, $"the {field.Label.ToLowerInvariant()} of {_display}");
         if (write.Status == WriteStatus.Applied)
@@ -359,6 +377,23 @@ internal sealed unsafe class ColorPipeline
         }
 
         return write;
+    }
+
+    /// <summary>What a <c>CTL_PIXTX_CONFIG_QUERY_TYPE_CURRENT</c> query of the curve answered.</summary>
+    /// <param name="result">The query's result.</param>
+    /// <returns>How to read it.</returns>
+    internal static CurrentQuery ClassifyCurrent(int result)
+    {
+        return result switch
+        {
+            IgclResult.Success => CurrentQuery.Held,
+            // Nothing set since the driver started: older drivers say so with DATA_NOT_FOUND, current ones
+            // with KMD_CALL. The pipe then applies the driver's own, neutral configuration.
+            IgclResult.DataNotFound or IgclResult.KmdCall => CurrentQuery.NeverSet,
+            // Another writer's configuration is the current one; what this block holds is not reported.
+            IgclResult.InvalidPixTxBlockType => CurrentQuery.NotReported,
+            _ => CurrentQuery.Failed
+        };
     }
 
     /// <summary>Reads the pipe once per pass and recognises what it holds.</summary>
@@ -376,97 +411,62 @@ internal sealed unsafe class ColorPipeline
         _matrix = null;
         var neutral = ColorSettings.Neutral;
         var stored = Recorded();
+        var block = _lutBlock;
+        var result = Query(&block);
+        string message;
+        switch (ClassifyCurrent(result))
+        {
+            case CurrentQuery.Held:
+                var channel = _samples.AsSpan(0, _neutralCurve.Length);
+                if (stored is { } record && ColorMath.Matches(_recordedCurve, channel))
+                {
+                    // The consumer's own curve, set together with its matrix.
+                    _curve = record;
+                    _matrix = HasMatrix ? record : null;
+                    message = "The display's colour is the consumer's own.";
+                }
+                else if (ColorMath.Matches(_neutralCurve, channel))
+                {
+                    _curve = neutral;
+                    message = "The display holds a neutral tone curve the consumer did not write; "
+                              + "hue and saturation are unknown.";
+                }
+                else
+                {
+                    message = "The display holds a tone curve the consumer did not write; its colour is unknown.";
+                }
 
-        var curveResult = ReadCurve();
-        if (curveResult == IgclResult.Success)
-        {
-            var channel = _samples.AsSpan(0, _neutralCurve.Length);
-            _curve = ColorMath.Matches(_neutralCurve, channel)
-                ? neutral
-                : stored is { } record && ColorMath.Matches(_recordedCurve, channel)
-                    ? record
-                    : null;
-            _log.LogChange(GpuLogLevel.Info, "color", _curveKey, _curve is null
-                ? "The display holds a tone curve the consumer did not write; brightness, contrast and gamma are unknown."
-                : "The display's tone curve is the identity or the consumer's own.");
-        }
-        else
-        {
-            _result = curveResult;
+                break;
+            case CurrentQuery.NeverSet:
+                _curve = neutral;
+                _matrix = HasMatrix ? neutral : null;
+                message = "No colour has been set on the display since the driver started; it is neutral.";
+                break;
+            case CurrentQuery.NotReported:
+                message = "Another writer set the display's colour last and the driver does not report it; "
+                          + $"its colour is unknown ({IgclResult.Describe(result)}).";
+                break;
+            default:
+                _result = result;
+                message = $"The display's colour could not be read ({IgclResult.Describe(result)}).";
+                break;
         }
 
-        if (_matrixBlock is null)
-        {
-            return;
-        }
-
-        var matrixResult = ReadMatrix();
-        if (matrixResult == IgclResult.Success)
-        {
-            _matrix = ColorMath.Matches(ColorMath.IdentityMatrix, _coefficients)
-                ? neutral
-                : stored is { } record && ColorMath.Matches(_recordedMatrix, _coefficients)
-                    ? record
-                    : null;
-            _log.LogChange(GpuLogLevel.Info, "color", _matrixKey, _matrix is null
-                ? "The display holds a colour matrix the consumer did not write; hue and saturation are unknown."
-                : "The display's colour matrix is the identity or the consumer's own.");
-        }
-        else if (_result == IgclResult.Success)
-        {
-            _result = matrixResult;
-        }
+        _observation = message;
+        _log.LogChange(GpuLogLevel.Info, "color", _curveKey, $"{_display}: {message}");
     }
 
-    /// <summary>The recorded settings, with their curve and matrix rebuilt only when the record changed.</summary>
+    /// <summary>The recorded settings, with their curve rebuilt only when the record changed.</summary>
     private ColorSettings? Recorded()
     {
         var stored = _store.Get(_display);
         if (stored is { } record && stored != _recorded)
         {
             ColorMath.FillCurve(record, _recordedCurve);
-            ColorMath.HueSaturationMatrix(record).CopyTo(_recordedMatrix, 0);
         }
 
         _recorded = stored;
         return stored;
-    }
-
-    private int ReadCurve()
-    {
-        var block = _lutBlock;
-        var result = Query(&block);
-        if (result != IgclResult.DataNotFound)
-        {
-            return result;
-        }
-
-        // Nothing set yet is the driver's own curve, which is the neutral one.
-        _neutralCurve.CopyTo(_samples, 0);
-        return IgclResult.Success;
-    }
-
-    private int ReadMatrix()
-    {
-        var block = _matrixBlock!.Value;
-        var result = Query(&block);
-        if (result == IgclResult.DataNotFound)
-        {
-            ColorMath.IdentityMatrix.CopyTo(_coefficients);
-            return IgclResult.Success;
-        }
-
-        if (result != IgclResult.Success)
-        {
-            return result;
-        }
-
-        for (var index = 0; index < MatrixSize; index++)
-        {
-            _coefficients[index] = block.Config.Matrix.Matrix[index];
-        }
-
-        return result;
     }
 
     private int Query(CtlPixTxBlockConfig* block)
@@ -478,7 +478,8 @@ internal sealed unsafe class ColorPipeline
         return _session.Call(_session.Api.PixTxGetConfig, _output.Handle, ref request);
     }
 
-    private int WriteCurve(ColorSettings settings, WriteAdmission admission)
+    /// <summary>Sets the curve and, when the pipe has one, the matrix in one call, in pipe order.</summary>
+    private int Apply(ColorSettings settings, WriteAdmission admission)
     {
         var lut = _lutBlock.Config.OneDLut;
         var perChannel = (int)lut.SamplesPerChannel;
@@ -487,38 +488,52 @@ internal sealed unsafe class ColorPipeline
             ColorMath.FillCurve(settings, _samples.AsSpan(channel * perChannel, perChannel));
         }
 
-        var block = _lutBlock;
-        return Apply(&block, admission);
-    }
-
-    private int WriteMatrix(ColorSettings settings, WriteAdmission admission)
-    {
-        var block = _matrixBlock!.Value;
-        var coefficients = ColorMath.HueSaturationMatrix(settings);
-        for (var index = 0; index < 3; index++)
+        var blocks = stackalloc CtlPixTxBlockConfig[2];
+        uint count = 1;
+        blocks[0] = _lutBlock;
+        if (_matrixBlock is { } matrixBlock)
         {
-            block.Config.Matrix.PreOffsets[index] = 0;
-            block.Config.Matrix.PostOffsets[index] = 0;
+            var coefficients = ColorMath.HueSaturationMatrix(settings);
+            for (var index = 0; index < 3; index++)
+            {
+                matrixBlock.Config.Matrix.PreOffsets[index] = 0;
+                matrixBlock.Config.Matrix.PostOffsets[index] = 0;
+            }
+
+            for (var index = 0; index < MatrixSize; index++)
+            {
+                matrixBlock.Config.Matrix.Matrix[index] = coefficients[index];
+            }
+
+            blocks[_matrixFirst ? 0 : 1] = matrixBlock;
+            blocks[_matrixFirst ? 1 : 0] = _lutBlock;
+            count = 2;
         }
 
-        for (var index = 0; index < MatrixSize; index++)
-        {
-            block.Config.Matrix.Matrix[index] = coefficients[index];
-        }
-
-        return Apply(&block, admission);
-    }
-
-    private int Apply(CtlPixTxBlockConfig* block, WriteAdmission admission)
-    {
         CtlPixTxPipeSetConfig request = default;
         request.OperationType = OperationSetCustom;
         request.Flags = FlagPersist;
-        request.NumBlocks = 1;
-        request.BlockConfigs = (nint)block;
+        request.NumBlocks = count;
+        request.BlockConfigs = (nint)blocks;
         admission.Check();
         return _session.Call(_session.Api.PixTxSetConfig, _output.Handle, ref request);
     }
+}
+
+/// <summary>How a current-configuration query of the curve answered.</summary>
+internal enum CurrentQuery
+{
+    /// <summary>The driver returned the curve it holds.</summary>
+    Held,
+
+    /// <summary>Nothing has been set since the driver started; the pipe is neutral.</summary>
+    NeverSet,
+
+    /// <summary>Another writer's configuration is current and the driver does not report this block.</summary>
+    NotReported,
+
+    /// <summary>The query failed.</summary>
+    Failed
 }
 
 /// <summary>One colour value of one display.</summary>

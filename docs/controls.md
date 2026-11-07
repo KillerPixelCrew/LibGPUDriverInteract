@@ -34,6 +34,18 @@ AppliedUnverified remains an accepted setter when readback is absent, fails or d
 values remain published until confirmation or a later independent change. Missing observations do
 not hide otherwise writable controls. ReadbackValue is populated only for verified outcomes.
 
+A read the driver does not answer publishes `TransportFaulted` with the fixed sentence "The current
+value is unknown: the driver did not report it." for every vendor. The driver's own answer, such as an
+IGCL result code, goes only to the log, prefixed with the control key.
+
+Intel display colour reads the gamma LUT through `CTL_PIXTX_CONFIG_QUERY_TYPE_CURRENT`, which returns
+only the configuration of the last set call and never a CSC matrix. Measured on 2026-11-07 on an Intel
+laptop panel and seen in an Arc B370 log: `CTL_RESULT_ERROR_KMD_CALL` before any set (read as the
+driver's neutral colour), the written samples after a set, and `CTL_RESULT_ERROR_INVALID_PIXTX_BLOCK_TYPE`
+for both CSC blocks and for the LUT while another writer's configuration is current (read as unknown).
+Every colour write therefore sets the LUT and the hue/saturation matrix in one call, and a LUT that
+matches the colour record carries the record's matrix.
+
 A setter that reports failure after it was dispatched is settled by readback, never by sending it
 again: the control is read immediately and then over a short settle window of about a second and a
 half. A readback matching the request is AppliedVerified, because the driver holds the value

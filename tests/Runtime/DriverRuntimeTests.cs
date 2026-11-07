@@ -78,6 +78,24 @@ public sealed class DriverRuntimeTests
     }
 
     [Fact]
+    public void AFailedReadPublishesPlainTextAndLogsTheDriverAnswerWithTheControl()
+    {
+        var control = new DriverTestControl
+        {
+            Reading = () => throw new DriverFailure("the driver answered 0x4800000b")
+        };
+        var sink = new RecordingDriverSink();
+        var runtime = new DriverRuntime("fixture", (_, _) => new DriverTestSession(control));
+        runtime.Start(sink, StateDirectory, () => true, CancellationToken.None);
+        var state = sink.States.Last();
+        Assert.Null(state.ObservedValue);
+        Assert.Equal("The current value is unknown: the driver did not report it.", state.Reason!.Detail);
+        Assert.DoesNotContain("0x", state.Reason.Detail, StringComparison.Ordinal);
+        Assert.Contains(sink.Logs, log => log.Contains(control.Key, StringComparison.Ordinal)
+                                          && log.Contains("0x4800000b", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public void FailedReadKeepsWritableControlsWithoutWritingDuringTopology()
     {
         var control = new DriverTestControl();

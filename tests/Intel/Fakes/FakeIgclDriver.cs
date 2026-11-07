@@ -62,6 +62,21 @@ internal sealed unsafe class FakeIgclDriver
     internal int ArcWriteResult { get; set; }
     internal uint ColorBlockCount { get; set; } = 1;
     internal int ColorWrites { get; private set; }
+
+    /// <summary>Adds a 3x3 CSC block after the gamma LUT, as the measured five-block pipes have.</summary>
+    internal bool ColorMatrix { get; set; }
+
+    /// <summary>What a current query answers before any set; real drivers say DATA_NOT_FOUND or KMD_CALL.</summary>
+    internal int ColorUnsetResult { get; set; } = IgclResult.DataNotFound;
+
+    /// <summary>Set to make the LUT answer as if another writer's configuration were current.</summary>
+    internal bool ColorSetElsewhere { get; set; }
+
+    /// <summary>The block types of the last set call, in the order it listed them.</summary>
+    internal int[] LastColorSetTypes { get; private set; } = [];
+
+    /// <summary>The LUT samples the last set call carried.</summary>
+    internal double[]? LastColorSamples { get; private set; }
     internal ConcurrentQueue<uint> PowerWrites { get; } = new();
     internal Action? AfterPowerWrite { get; set; }
 
@@ -235,10 +250,24 @@ internal sealed unsafe class FakeIgclDriver
     {
         if (pipe->QueryType == 1)
         {
-            return IgclResult.DataNotFound;
+            // Measured: only a LUT is reported, and only the one the last set call carried.
+            var queried = (CtlPixTxBlockConfig*)pipe->BlockConfigs;
+            if (queried->BlockType != 1 || ColorSetElsewhere)
+            {
+                return IgclResult.InvalidPixTxBlockType;
+            }
+
+            if (LastColorSamples is not { } samples)
+            {
+                return ColorUnsetResult;
+            }
+
+            samples.CopyTo(new Span<double>((void*)queried->Config.OneDLut.SampleValues, samples.Length));
+            return IgclResult.Success;
         }
 
-        pipe->NumBlocks = ColorBlockCount;
+        var count = ColorBlockCount + (ColorMatrix ? 1u : 0u);
+        pipe->NumBlocks = count;
         if (pipe->BlockConfigs != 0)
         {
             var blocks = (CtlPixTxBlockConfig*)pipe->BlockConfigs;
@@ -247,6 +276,10 @@ internal sealed unsafe class FakeIgclDriver
             lut->Config.OneDLut.SamplingType = 0;
             lut->Config.OneDLut.SamplesPerChannel = 2;
             lut->Config.OneDLut.Channels = 1;
+            if (ColorMatrix)
+            {
+                blocks[ColorBlockCount].BlockType = 3;
+            }
         }
 
         return IgclResult.Success;
@@ -255,6 +288,21 @@ internal sealed unsafe class FakeIgclDriver
     private int ColorSet(nint handle, CtlPixTxPipeSetConfig* pipe)
     {
         ColorWrites++;
+        var blocks = (CtlPixTxBlockConfig*)pipe->BlockConfigs;
+        var types = new int[pipe->NumBlocks];
+        for (var index = 0; index < types.Length; index++)
+        {
+            types[index] = blocks[index].BlockType;
+            if (blocks[index].BlockType == 1)
+            {
+                var lut = blocks[index].Config.OneDLut;
+                LastColorSamples = new ReadOnlySpan<double>((void*)lut.SampleValues,
+                    (int)(lut.SamplesPerChannel * lut.Channels)).ToArray();
+            }
+        }
+
+        LastColorSetTypes = types;
+        ColorSetElsewhere = false;
         return IgclResult.Success;
     }
 
