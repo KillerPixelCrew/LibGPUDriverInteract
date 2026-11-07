@@ -21,6 +21,7 @@ internal sealed partial class IntelSession : IDriverSession
     private readonly ApplicationProfileSynchronizer _profiles;
     private readonly IgclSession _session;
     private IntelModel? _model;
+    private DriverModel? _published;
 
     internal IntelSession(string stateDirectory, IDriverSink sink)
         : this(stateDirectory, sink, IgclApi.TryLoad(sink)
@@ -61,10 +62,22 @@ internal sealed partial class IntelSession : IDriverSession
         _session.BeginPass();
     }
 
+    /// <summary>Builds the controls, or keeps them when the connected outputs are the ones already built.</summary>
+    /// <remarks>
+    ///     Which controls a display offers is decided when it is found. A topology signal with the same
+    ///     outputs, such as the display powering off for sleep, keeps the session's output handles, and the
+    ///     driver answers capability queries then with nothing: an Arc B370 on 2026-11-07 reported no colour
+    ///     blocks and <c>CTL_RESULT_ERROR_KMD_CALL</c> for Arc Sync, and the rebuilt model dropped those rows
+    ///     until the next wake. So the existing controls stay; they read again once the driver answers.
+    /// </remarks>
     public DriverModel Discover()
     {
         EnsureSession();
-        _session.RefreshOutputs();
+        if (!_session.RefreshOutputs() && _published is { } kept)
+        {
+            return kept;
+        }
+
         _model = IntelModel.Build(_session, _memory, _colors, _adapterKeys, _fixedRefresh, _log);
         // A rate a previous process fixed and never put back is restored as each display is first found.
         foreach (var display in _model.ArcSyncDisplays)
@@ -72,8 +85,9 @@ internal sealed partial class IntelSession : IDriverSession
             display.RecoverStale(Unbounded);
         }
 
-        return new DriverModel(_model.Sections,
+        _published = new DriverModel(_model.Sections,
             _model.Controls.Select(control => (DriverControl)new Control(control, _session)).ToArray());
+        return _published;
     }
 
     public GpuProfileSyncResult Sync(GpuProfileSync sync, WriteAdmission admission, CancellationToken token)

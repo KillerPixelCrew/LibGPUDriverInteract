@@ -34,6 +34,34 @@ public sealed class IntelSessionTests
     }
 
     [Fact]
+    public void RediscoveryWithTheSameDisplayKeepsItsControlsWhileTheDriverAnswersNothing()
+    {
+        using var directory = new TemporaryDirectory();
+        var native = new FakeIgclDriver { DisplayFlags = [3] };
+        using var session = native.CreateSession(directory.Root, new RecordingDriverSink());
+        var started = session.Discover();
+        var keys = started.Controls.Select(control => control.Key).ToArray();
+        Assert.Contains(keys, key => key.StartsWith("display.color-brightness", StringComparison.Ordinal));
+        Assert.Contains(keys, key => key.StartsWith("display.variable-refresh", StringComparison.Ordinal));
+
+        // As an Arc B370 answered on 2026-11-07 while its display powered off for sleep.
+        native.ColorBlockCount = 0;
+        native.ArcMonitorResult = IgclResult.KmdCall;
+        var asleep = session.Discover();
+        Assert.Equal(keys, asleep.Controls.Select(control => control.Key));
+        Assert.Equal(started.Sections, asleep.Sections);
+
+        // The kept controls read again once the driver answers.
+        native.ColorBlockCount = 1;
+        native.ArcMonitorResult = IgclResult.Success;
+        session.BeginPass();
+        var brightness = asleep.Controls.Single(control =>
+            control.Key.StartsWith("display.color-brightness", StringComparison.Ordinal));
+        Assert.Equal(GpuValue.Integer(0), brightness.Read());
+        Assert.Equal(1, native.Opens);
+    }
+
+    [Fact]
     public void SuppliedSessionOwnsItsNativeApiButBorrowsTheRegistryAndMemoryTransport()
     {
         using var directory = new TemporaryDirectory();

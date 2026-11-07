@@ -59,6 +59,7 @@ internal sealed unsafe class FakeIgclDriver
     internal CtlArcSyncProfileParams ArcProfileState { get; set; } = RecommendedProfile();
     internal ConcurrentQueue<CtlArcSyncProfileParams> ArcWrites { get; } = new();
     internal int ArcReadResult { get; set; }
+    internal int ArcMonitorResult { get; set; }
     internal int ArcWriteResult { get; set; }
     internal uint ColorBlockCount { get; set; } = 1;
     internal int ColorWrites { get; private set; }
@@ -218,6 +219,11 @@ internal sealed unsafe class FakeIgclDriver
 
     private int ArcMonitor(nint handle, CtlArcSyncMonitorParams* monitor)
     {
+        if (ArcMonitorResult != IgclResult.Success)
+        {
+            return ArcMonitorResult;
+        }
+
         monitor->IsSupported = 1;
         monitor->MinimumHz = MinimumHz;
         monitor->MaximumHz = MaximumHz;
