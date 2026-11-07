@@ -258,8 +258,7 @@ internal sealed class NvSettingControl : DriverControl
     internal NvSettingControl(INvProfiles api, NvSettingDefinition setting, string section, IEnumerable<uint> values)
         : base(DriverDescriptors.Choice("driver." + setting.Id.ToString("x8"), "driver", setting.Label, section,
             setting.Native ? GpuProfileScope.NativePerApplication : GpuProfileScope.GlobalOnly,
-            values.Select(value => (Encode(value), setting.Values.FirstOrDefault(option => option.Value == value).Label
-                                                   ?? "Driver value 0x" + value.ToString("X8")))))
+            Labelled(setting, values)))
     {
         _api = api;
         Setting = setting;
@@ -278,6 +277,51 @@ internal sealed class NvSettingControl : DriverControl
         _api.Set(_api.GlobalProfile(), Setting.Id, requested, admission);
         // The runtime's BeginPass reloads DRS before any readback, so no reload is needed here.
         _api.Save(admission);
+    }
+
+    /// <summary>The label of a value: its table entry, its size for a sized setting, or "Custom".</summary>
+    /// <param name="setting">The setting.</param>
+    /// <param name="value">A value the driver offers or holds.</param>
+    /// <returns>A label that never shows the raw driver value.</returns>
+    /// <remarks>
+    ///     The driver can hold a value no table names, such as a shader cache size another tool set. It is
+    ///     still offered, so the current value stays selectable, under a name a user can read.
+    /// </remarks>
+    internal static string LabelOf(NvSettingDefinition setting, uint value)
+    {
+        if (setting.Values.FirstOrDefault(option => option.Value == value).Label is { } label)
+        {
+            return label;
+        }
+
+        double? megabytes = setting.Unit switch
+        {
+            NvValueUnit.Megabytes => value,
+            NvValueUnit.Bytes => value / 1048576.0,
+            _ => null
+        };
+        return megabytes switch
+        {
+            null => "Custom",
+            >= 1024 => $"{(megabytes.Value / 1024).ToString("0.#", CultureInfo.InvariantCulture)} GB",
+            _ => $"{megabytes.Value.ToString("0.#", CultureInfo.InvariantCulture)} MB"
+        };
+    }
+
+    /// <summary>Every offered value with its label; repeated labels are numbered so each stays distinct.</summary>
+    /// <param name="setting">The setting.</param>
+    /// <param name="values">The offered values.</param>
+    /// <returns>The encoded values and their labels, in offer order.</returns>
+    internal static IEnumerable<(string Value, string Label)> Labelled(NvSettingDefinition setting,
+        IEnumerable<uint> values)
+    {
+        Dictionary<string, int> seen = new(StringComparer.Ordinal);
+        foreach (var value in values)
+        {
+            var label = LabelOf(setting, value);
+            var count = seen[label] = seen.GetValueOrDefault(label) + 1;
+            yield return (Encode(value), count == 1 ? label : $"{label} {count}");
+        }
     }
 
     internal static string Encode(uint value)

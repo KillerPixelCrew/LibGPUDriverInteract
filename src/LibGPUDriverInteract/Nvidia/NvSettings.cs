@@ -9,7 +9,21 @@ internal sealed record NvSettingDefinition(
     string Group,
     bool Native,
     bool Documented,
-    IReadOnlyList<(uint Value, string Label)> Values);
+    IReadOnlyList<(uint Value, string Label)> Values,
+    NvValueUnit Unit = NvValueUnit.None);
+
+/// <summary>What a setting's raw value counts, so a value outside its table can still be named.</summary>
+internal enum NvValueUnit
+{
+    /// <summary>An enumeration: a value outside the table has no name.</summary>
+    None,
+
+    /// <summary>Megabytes.</summary>
+    Megabytes,
+
+    /// <summary>Bytes.</summary>
+    Bytes
+}
 
 internal static class NvSettings
 {
@@ -36,14 +50,14 @@ internal static class NvSettings
             (0x00000000, "Disabled"), (0x00000400, "1 GB"), (0x00000800, "2 GB"), (0x00001000, "4 GB"),
             (0x00002000, "8 GB"), (0x00002800, "10 GB"), (0x00005000, "20 GB"), (0x0000c800, "50 GB"),
             (0x00019000, "100 GB"), (0xffffffff, "Unlimited")
-        ]),
+        ], NvValueUnit.Megabytes),
         new(0x000f00ba, "Resizable BAR", "performance", true, false,
             [(0x00000000, "Disabled"), (0x00000001, "Enabled")]),
         new(0x000f00ff, "Resizable BAR - Size Limit", "performance", true, false,
         [
             (0x00000000, "Default"), (0x0c800000, "200 MB"), (0x40000000, "1 GB"), (0x60000000, "1.5 GB"),
             (0x80000000, "2 GB")
-        ]),
+        ], NvValueUnit.Bytes),
         new(0x00e942fc, "Resizable BAR - Intel CPU Exclusion", "performance", true, false,
             [(0x00000000, "Allow Intel"), (0x00000001, "Disallow Intel")]),
         new(0x00e942fe, "Resizable BAR - DirectX Laptop Workaround", "performance", true, false,
