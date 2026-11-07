@@ -17,8 +17,10 @@ public sealed class GpuDriverPackageInstaller(GpuDriverUpdateCatalog catalog, st
     {
         Directory.CreateDirectory(_root);
         var path = Path.Combine(_root, Guid.NewGuid().ToString("N") + ".exe");
+        // Synchronous: WinVerifyTrust reads through this handle without OVERLAPPED, and an overlapped
+        // handle makes a correctly signed package fail with TRUST_E_BAD_DIGEST.
         var held = new FileStream(path, FileMode.CreateNew, FileAccess.ReadWrite, FileShare.Read, 81920,
-            FileOptions.Asynchronous | FileOptions.SequentialScan);
+            FileOptions.SequentialScan);
         try
         {
             var referrer = package.Adapter.Vendor == GpuVendor.Amd ? package.Details : null;
