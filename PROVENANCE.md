@@ -14,14 +14,16 @@ AMD/NVIDIA registry codecs. The GPL-3.0-or-later SRE 1.0 source was inspected on
 evidence; no SRE implementation code is incorporated. [Display mechanisms](docs/displays.md) records
 the upstream references, exact native layouts, preservation boundaries and deferred hardware proof.
 
-Fixed refresh rates use the Arc Sync Custom profile from the same public IGCL header, with both refresh
-bounds at the requested rate, as the WSGM maintainer set rates by hand before. No hardware result is
-recorded for this path yet; see [Display mechanisms](docs/displays.md#fixed-refresh-rates).
+Fixed refresh rates use the Arc Sync Custom profile from the same public IGCL header, with both
+refresh bounds at the requested rate, as the WSGM maintainer set rates by hand before. No hardware
+result is recorded for this path yet; see
+[Display mechanisms](docs/displays.md#fixed-refresh-rates).
 
 The policy Arc Sync write and Intel's private VRR escape for the low and high frame rate solutions
-follow ClawLab's MSI Claw Intel VRR Range Fix 3.0.0 (MIT), as carried unchanged into the maintainer's
-Atlas8Tweaks VRR Fix 1.0.0 `engine/Interop.ps1`. This library reimplements them in its own IGCL session
-and opens the escape's adapter by LUID; see [third-party notices](THIRD_PARTY_NOTICES.md) and
+follow ClawLab's MSI Claw Intel VRR Range Fix 3.0.0 (MIT), as carried unchanged into the
+maintainer's Atlas8Tweaks VRR Fix 1.0.0 `engine/Interop.ps1`. This library reimplements them in its
+own IGCL session and opens the escape's adapter by LUID; see
+[third-party notices](THIRD_PARTY_NOTICES.md) and
 [Display mechanisms](docs/displays.md#arc-sync-for-the-owning-policy-and-intels-frame-rate-solutions).
 
 - [Intel implementation provenance](https://github.com/KillerPixelCrew/WSGM/blob/1df3f4d8987fcff5f1c8f2554c489195f1cb8b13/src/WSGM.Plugin.IntelGpu/PROVENANCE.md):
@@ -55,7 +57,11 @@ Per-output NVIDIA Adaptive Sync uses NVIDIA's public
 IDs `0xb73d1ee9` and `0x3eebba1d` from
 [`nvapi_interface.h`](https://github.com/NVIDIA/nvapi/blob/main/nvapi_interface.h). These controls
 have compilation and isolated output-routing regressions; their live write behavior awaits manual
-acceptance.
+acceptance. NVIDIA documents `NVAPI_DATA_NOT_FOUND` from the getter as missing application flip
+data, not lack of writable support. With no flip data, an explicit toggle uses the setter's
+documented zero frame interval for EDID defaults and leaves frame splitting enabled. Available flip
+data still preserves both settings. Missing readback remains unknown rather than being reported as
+verified.
 
 The maintainer confirmed Intel and NVIDIA hardware testing and contributor AMD testing on
 2026-10-09. That confirmation describes the original engines. The extraction retains their tests and

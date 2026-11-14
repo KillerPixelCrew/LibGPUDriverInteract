@@ -466,15 +466,20 @@ internal sealed unsafe partial class NvApi : INvProfiles, INvAdaptiveSync, IDisp
         return Number(data, 4);
     }
 
-    public NvAdaptiveSync AdaptiveSync(uint display)
+    public NvAdaptiveSync? AdaptiveSync(uint display)
     {
         // NV_GET_ADAPTIVE_SYNC_DATA_V1, with the 64-bit timestamp aligned to eight bytes.
         var data = new byte[40];
         Number(data, 0, Version(data.Length, 1));
         fixed (byte* pointer = data)
         {
-            Check(((delegate* unmanaged[Cdecl]<uint, byte*, int>)Function(0xb73d1ee9))(display, pointer),
-                "DISP_GetAdaptiveSyncData");
+            var status = ((delegate* unmanaged[Cdecl]<uint, byte*, int>)Function(0xb73d1ee9))(display, pointer);
+            if (status == -121) // NVAPI_DATA_NOT_FOUND: no application flip data is available.
+            {
+                return null;
+            }
+
+            Check(status, "DISP_GetAdaptiveSyncData");
         }
 
         return new NvAdaptiveSync(Number(data, 4), Number(data, 8));

@@ -185,7 +185,7 @@ internal readonly record struct NvAdaptiveSync(uint MaxFrameInterval, uint Flags
 
 internal interface INvAdaptiveSync
 {
-    NvAdaptiveSync AdaptiveSync(uint display);
+    NvAdaptiveSync? AdaptiveSync(uint display);
     void SetAdaptiveSync(uint display, NvAdaptiveSync current, bool enabled, WriteAdmission admission);
 }
 
@@ -195,11 +195,16 @@ internal sealed class NvGsyncControl(INvAdaptiveSync api, uint display, string i
 {
     internal override GpuValue Read()
     {
-        return GpuValue.Boolean((api.AdaptiveSync(display).Flags & 1u) == 0);
+        var current = api.AdaptiveSync(display)
+                      ?? throw new DriverFailure("NVIDIA has no application flip data for Adaptive Sync readback.");
+        return GpuValue.Boolean((current.Flags & 1u) == 0);
     }
 
     internal override void Write(GpuValue value, WriteAdmission admission)
     {
-        api.SetAdaptiveSync(display, api.AdaptiveSync(display), value.BooleanValue == true, admission);
+        // No flip data is normal outside a presenting application. NVIDIA defines a zero interval
+        // as the display's EDID default; it must not prevent an explicit output toggle.
+        var current = api.AdaptiveSync(display) ?? default;
+        api.SetAdaptiveSync(display, current, value.BooleanValue == true, admission);
     }
 }
