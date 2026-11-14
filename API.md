@@ -55,6 +55,9 @@ are no lifecycle generations, command IDs or library deadline clocks. Cancellati
 a native call or prove that a dispatched write did not complete. `GpuDescriptor.Prerequisite` names a Boolean control
 on the same instance that the vendor pairs with this one: a consumer turns it on first and writes it
 first in a profile pass, and the library still writes only what it is commanded to.
+`GpuDescriptor.Frequent` marks the few controls each vendor's users change often (sync, latency,
+upscaling, sharpening, frame generation), so a consumer with little room can show only those and
+link to the rest. Every control is published either way.
 
 Positional records are `GpuChoice(Value, Label)`, `GpuReason(Code, Detail, Retryable = false)`,
 `GpuStatus(Health, Detail)`, `GpuLogEntry(Level, Scope, Message, Timestamp)`,

@@ -137,7 +137,7 @@ internal sealed class NvSession : IDriverSession
         }
 
         _settings = settings;
-        return new DriverModel(sections, controls);
+        return new DriverModel(sections, controls, NvSettings.Frequent);
     }
 
     /// <inheritdoc />

@@ -69,6 +69,16 @@ public sealed record GpuDescriptor
     ///     vendor guidance, not a write the library performs on its own.
     /// </remarks>
     public string? Prerequisite { get; init; }
+
+    /// <summary>
+    ///     Whether the vendor's driver offers this control among the few its users change often, such as
+    ///     sync, latency, upscaling and frame generation.
+    /// </summary>
+    /// <remarks>
+    ///     A consumer with little room, such as a quick panel, can show only these and link to the rest. Every
+    ///     control stays published either way; the flag changes no behavior of the library.
+    /// </remarks>
+    public bool Frequent { get; init; }
 }
 
 /// <summary>One legal named option.</summary>

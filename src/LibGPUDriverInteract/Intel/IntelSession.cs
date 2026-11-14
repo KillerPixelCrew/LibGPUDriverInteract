@@ -12,6 +12,17 @@ namespace LibGPUDriverInteract.Intel;
 /// <summary>Intel's native session, using the shared driver owner's lifetime and observations.</summary>
 internal sealed partial class IntelSession : IDriverSession
 {
+    /// <summary>
+    ///     The Intel Graphics Software settings users change most: frame synchronization, low latency, frame
+    ///     generation, sharpening, Endurance Gaming, CMAA and retro scaling.
+    /// </summary>
+    private static readonly IReadOnlySet<string> Frequent = new[]
+        {
+            "graphics.frame-sync", "graphics.low-latency", "graphics.frame-generation", "graphics.sharpening",
+            "graphics.endurance-gaming", "graphics.cmaa", "graphics.retro-scaling"
+        }
+        .ToHashSet(StringComparer.Ordinal);
+
     private readonly IReadOnlyList<AdapterClassEntry> _adapterKeys;
     private readonly IgclApi _api;
     private readonly ColorStore _colors;
@@ -86,7 +97,7 @@ internal sealed partial class IntelSession : IDriverSession
         }
 
         _published = new DriverModel(_model.Sections,
-            _model.Controls.Select(control => (DriverControl)new Control(control, _session)).ToArray());
+            _model.Controls.Select(control => (DriverControl)new Control(control, _session)).ToArray(), Frequent);
         return _published;
     }
 

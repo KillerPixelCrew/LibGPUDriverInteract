@@ -4,7 +4,17 @@ using System.Globalization;
 
 namespace LibGPUDriverInteract.Runtime;
 
-internal sealed record DriverModel(IReadOnlyList<GpuSection> Sections, IReadOnlyList<DriverControl> Controls);
+/// <summary>A session's sections and controls.</summary>
+/// <param name="Sections">The sections, in order.</param>
+/// <param name="Controls">The controls.</param>
+/// <param name="Frequent">
+///     The capability ids the vendor's users change often; their descriptors are published with
+///     <see cref="GpuDescriptor.Frequent" /> set.
+/// </param>
+internal sealed record DriverModel(
+    IReadOnlyList<GpuSection> Sections,
+    IReadOnlyList<DriverControl> Controls,
+    IReadOnlySet<string>? Frequent = null);
 
 /// <summary>A native session accessed only while GpuDriver owns its single lane.</summary>
 internal interface IDriverSession : IDisposable
@@ -425,7 +435,10 @@ internal sealed partial class DriverRuntime(string id, Func<string, IDriverSink,
         var descriptors = new GpuDescriptorSet
         {
             Sections = model.Sections,
-            Descriptors = model.Controls.Select(control => control.Descriptor).ToArray()
+            Descriptors = model.Controls.Select(control =>
+                model.Frequent?.Contains(control.Descriptor.CapabilityId) == true
+                    ? control.Descriptor with { Frequent = true }
+                    : control.Descriptor).ToArray()
         };
         if (SameModel(_descriptors, descriptors))
         {

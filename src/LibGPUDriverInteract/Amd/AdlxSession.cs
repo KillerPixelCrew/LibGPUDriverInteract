@@ -9,6 +9,17 @@ namespace LibGPUDriverInteract.Amd;
 
 internal sealed unsafe partial class AdlxSession : IDriverSession
 {
+    /// <summary>
+    ///     The Radeon settings users change most: Anti-Lag, Boost, Image Sharpening, Enhanced Sync, vertical
+    ///     refresh, Super Resolution and Fluid Motion Frames.
+    /// </summary>
+    private static readonly IReadOnlySet<string> Frequent = new[]
+        {
+            "graphics.anti-lag", "graphics.boost", "graphics.image-sharpening", "graphics.enhanced-sync",
+            "graphics.vertical-sync", "graphics.rsr", "graphics.afmf"
+        }
+        .ToHashSet(StringComparer.Ordinal);
+
     private readonly AdlxObject? _displays;
     private readonly AdlxObject? _displays3;
     private readonly long _epoch;
@@ -172,7 +183,7 @@ internal sealed unsafe partial class AdlxSession : IDriverSession
             var previous = _objects;
             _objects = objects;
             Release(previous);
-            return new DriverModel(sections, controls);
+            return new DriverModel(sections, controls, Frequent);
         }
         catch
         {

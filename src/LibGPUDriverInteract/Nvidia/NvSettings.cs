@@ -27,6 +27,18 @@ internal enum NvValueUnit
 
 internal static class NvSettings
 {
+    /// <summary>
+    ///     The settings NVIDIA's users change most: power, latency, sync, image scaling, DLSS overrides and
+    ///     Smooth Motion, as the capability ids their controls publish.
+    /// </summary>
+    internal static readonly IReadOnlySet<string> Frequent = new[]
+        {
+            0x1057eb71u, 0x10835000u, 0x00a879cfu, 0x1194f158u, 0x10444444u, 0x10e41e01u, 0x10e41e03u,
+            0xb0d384c0u
+        }
+        .Select(id => "driver." + id.ToString("x8", System.Globalization.CultureInfo.InvariantCulture))
+        .ToHashSet(StringComparer.Ordinal);
+
     internal static readonly NvSettingDefinition[] All =
     [
         new(0x1057eb71, "Power management", "performance", true, true,

@@ -32,6 +32,28 @@ public sealed class DriverRuntimeTests
     }
 
     [Fact]
+    public void ACapabilityTheVendorMarksFrequentIsPublishedFrequent()
+    {
+        var frequent = new DriverTestControl();
+        var other = new DriverTestControl("second");
+        var section = DriverDescriptors.Section("graphics", "Graphics", true);
+        var session = new DriverTestSession(frequent, other)
+        {
+            Model = new DriverModel([section], [frequent, other],
+                new HashSet<string>([frequent.Descriptor.CapabilityId], StringComparer.Ordinal))
+        };
+        var sink = new RecordingDriverSink();
+        var runtime = new DriverRuntime("fixture", (_, _) => session);
+        runtime.Start(sink, StateDirectory, () => true, CancellationToken.None);
+
+        var published = sink.Descriptors!.Descriptors;
+
+        Assert.True(published.Single(item => item.CapabilityId == frequent.Descriptor.CapabilityId).Frequent);
+        Assert.False(published.Single(item => item.CapabilityId == other.Descriptor.CapabilityId).Frequent);
+        Assert.False(frequent.Descriptor.Frequent, "the control's own descriptor is not changed");
+    }
+
+    [Fact]
     public void StartupObservationAndTopologyNeverDispatchSupportWrites()
     {
         var order = new List<string>();
