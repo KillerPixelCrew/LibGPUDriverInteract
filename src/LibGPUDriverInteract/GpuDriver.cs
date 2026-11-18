@@ -24,6 +24,7 @@ public sealed partial class GpuDriver : IAsyncDisposable
     private Task? _disposal;
     private bool _disposed;
     private Task? _observation;
+    private TaskCompletionSource? _observationPaused;
     private Task<GpuHealth>? _startup;
     private GpuStatus _status = new(GpuHealth.Unavailable, "The driver has not started.");
     private Task? _stop;
@@ -315,17 +316,41 @@ public sealed partial class GpuDriver : IAsyncDisposable
         return false;
     }
 
+    /// <summary>Pauses background observation without closing the native session.</summary>
+    /// <param name="paused">Whether periodic driver reads should wait.</param>
+    public void SetObservationPaused(bool paused)
+    {
+        lock (_stateGate)
+        {
+            if (paused)
+            {
+                _observationPaused ??= new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            }
+            else
+            {
+                var resume = _observationPaused;
+                Volatile.Write(ref _observationPaused, null);
+                resume?.TrySetResult();
+            }
+        }
+    }
+
     private async Task ObserveLoopAsync(CancellationToken token)
     {
-        using var timer = new PeriodicTimer(TimeSpan.FromSeconds(10));
         try
         {
-            while (await timer.WaitForNextTickAsync(token).ConfigureAwait(false))
+            while (!token.IsCancellationRequested)
             {
+                if (Volatile.Read(ref _observationPaused) is { } pause)
+                {
+                    await pause.Task.WaitAsync(token).ConfigureAwait(false);
+                }
+
+                await Task.Delay(TimeSpan.FromSeconds(10), token).ConfigureAwait(false);
                 await _lane.WaitAsync(token).ConfigureAwait(false);
                 try
                 {
-                    if (_active)
+                    if (_active && Volatile.Read(ref _observationPaused) is null)
                     {
                         _runtime.Observe(token);
                     }

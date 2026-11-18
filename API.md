@@ -16,6 +16,7 @@ ValueTask<GpuCommandResult> ExecuteAsync(GpuCommand command,
     CancellationToken cancellationToken = default);
 ValueTask<GpuProfileSyncResult> SyncApplicationProfilesAsync(GpuProfileSync sync,
     CancellationToken cancellationToken = default);
+void SetObservationPaused(bool paused);
 ValueTask RefreshTopologyAsync(CancellationToken cancellationToken = default);
 ValueTask<GpuRefreshRateRange?> ReadRefreshRateRangeAsync(GpuDisplayTarget display,
     CancellationToken cancellationToken = default);
@@ -52,10 +53,10 @@ Records with many fields (`GpuDescriptor`, `GpuSection`, `GpuCategory`, `GpuDesc
 `GpuValue`, `GpuState`, `GpuCommand`, `GpuCommandResult`) use init properties. Commands contain
 `CapabilityId`, `InstanceId` and `RequestedValue`; cancellation is supplied to the operation. There
 are no lifecycle generations, command IDs or library deadline clocks. Cancellation cannot terminate
-a native call or prove that a dispatched write did not complete. `GpuDescriptor.Prerequisite` names a Boolean control
-on the same instance that the vendor pairs with this one: a consumer turns it on first and writes it
-first in a profile pass, and the library still writes only what it is commanded to.
-`GpuDescriptor.Frequent` marks the few controls each vendor's users change often (sync, latency,
+a native call or prove that a dispatched write did not complete. `GpuDescriptor.Prerequisite` names
+a Boolean control on the same instance that the vendor pairs with this one: a consumer turns it on
+first and writes it first in a profile pass, and the library still writes only what it is commanded
+to. `GpuDescriptor.Frequent` marks the few controls each vendor's users change often (sync, latency,
 upscaling, sharpening, frame generation), so a consumer with little room can show only those and
 link to the rest. Every control is published either way.
 
